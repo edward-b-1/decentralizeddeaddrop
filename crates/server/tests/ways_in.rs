@@ -82,7 +82,7 @@ async fn invites_can_be_switched_off() {
 }
 
 #[tokio::test]
-async fn the_server_password_lets_devices_in_and_guessing_is_slowed() {
+async fn the_server_password_lets_devices_in() {
     let server = Server::new().await;
     let body = json!({ "password": "correct horse" });
     let (status, _) = server.as_phone(&server.operator, PUT, "/v1/operator/password", Some(body)).await;
@@ -92,16 +92,8 @@ async fn the_server_password_lets_devices_in_and_guessing_is_slowed() {
 
     let (status, _) = server.register(&SoftDevice::new(), json!({ "password": "correct horse" })).await;
     assert_eq!(status, StatusCode::CREATED);
-
-    for _ in 0..10 {
-        let (status, _) = server.register(&SoftDevice::new(), json!({ "password": "wrong" })).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-    }
-    let (status, _) = server.register(&SoftDevice::new(), json!({ "password": "correct horse" })).await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "after ten wrong guesses everyone waits");
-    server.state.clock.advance(61);
-    let (status, _) = server.register(&SoftDevice::new(), json!({ "password": "correct horse" })).await;
-    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = server.register(&SoftDevice::new(), json!({ "password": "wrong" })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Removing the password closes that way in again.
     let (status, _) =
@@ -109,6 +101,80 @@ async fn the_server_password_lets_devices_in_and_guessing_is_slowed() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = server.register(&SoftDevice::new(), json!({ "password": "correct horse" })).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// A server whose password is "correct horse".
+async fn password_server() -> Server {
+    let server = Server::new().await;
+    let body = json!({ "password": "correct horse" });
+    let (status, _) = server.as_phone(&server.operator, PUT, "/v1/operator/password", Some(body)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    server
+}
+
+/// One attempt at the password way in from `address`.
+async fn attempt(server: &Server, address: &str, password: &str) -> StatusCode {
+    server.register_from(Some(address), &SoftDevice::new(), json!({ "password": password })).await.0
+}
+
+#[tokio::test]
+async fn guessing_the_password_blocks_the_guesser_and_nobody_else() {
+    let server = password_server().await;
+    let (guesser, neighbour, honest) = ("203.0.113.7", "203.0.113.8", "198.51.100.20");
+
+    for _ in 0..10 {
+        assert_eq!(attempt(&server, guesser, "wrong").await, StatusCode::FORBIDDEN);
+    }
+    // The guesser is now refused even with the right password...
+    assert_eq!(attempt(&server, guesser, "correct horse").await, StatusCode::TOO_MANY_REQUESTS);
+    // ...while everyone else carries on, including the address next door.
+    for address in [neighbour, honest, "2001:db8:1:2::5"] {
+        assert_eq!(attempt(&server, address, "correct horse").await, StatusCode::CREATED, "{address}");
+    }
+    // The block does not touch the other ways in.
+    let invite = server.invite(1, 3600).await;
+    let (status, _) = server.register_from(Some(guesser), &SoftDevice::new(), json!({ "token": invite })).await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Ten minutes after the last wrong guess, the guesser may try again.
+    server.state.clock.advance(601);
+    assert_eq!(attempt(&server, guesser, "correct horse").await, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn nine_wrong_guesses_are_forgiven() {
+    let server = password_server().await;
+    for _ in 0..9 {
+        assert_eq!(attempt(&server, "203.0.113.7", "wrong").await, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(attempt(&server, "203.0.113.7", "correct horse").await, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn an_ipv6_guesser_cannot_dodge_the_limit_by_changing_address_within_their_network() {
+    let server = password_server().await;
+    for n in 0..10 {
+        let address = format!("2001:db8:aaaa:bbbb::{n:x}");
+        assert_eq!(attempt(&server, &address, "wrong").await, StatusCode::FORBIDDEN);
+    }
+    let same_network = "2001:db8:aaaa:bbbb:ffff:ffff:ffff:ffff";
+    assert_eq!(attempt(&server, same_network, "correct horse").await, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(attempt(&server, "2001:db8:aaaa:cccc::1", "correct horse").await, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn addresses_are_remembered_only_for_wrong_guesses_and_only_for_ten_minutes() {
+    let server = password_server().await;
+    let remembered = || server.state.failures.lock().unwrap().remembered();
+
+    assert_eq!(attempt(&server, "198.51.100.20", "correct horse").await, StatusCode::CREATED);
+    assert_eq!(remembered(), 0, "a caller who knows the password is never recorded");
+
+    assert_eq!(attempt(&server, "203.0.113.7", "wrong").await, StatusCode::FORBIDDEN);
+    assert_eq!(remembered(), 1);
+    server.state.clock.advance(601);
+    deaddropd::sweep(&server.state).await.unwrap();
+    assert_eq!(remembered(), 0, "forgotten ten minutes after the last wrong guess");
 }
 
 #[tokio::test]
@@ -286,4 +352,74 @@ async fn deleting_my_device_deletes_what_it_owned() {
     }
     let (_, mine) = server.as_phone(&member, GET, "/v1/channels", None).await;
     assert_eq!(mine["channels"], json!([]));
+}
+
+/// One registration attempt sent over a real TCP connection; returns the HTTP status.
+async fn attempt_over_tcp(address: std::net::SocketAddr, password: &str) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut body = registration(&SoftDevice::new());
+    body["password"] = json!(password);
+    let body = body.to_string();
+    let request = format!(
+        "POST /v1/devices HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    response.split(' ').nth(1).unwrap().parse().unwrap()
+}
+
+#[tokio::test]
+async fn the_running_server_sees_where_a_connection_comes_from() {
+    let server = password_server().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(deaddropd::serve(listener, server.state.clone(), std::future::pending()));
+
+    for _ in 0..10 {
+        assert_eq!(attempt_over_tcp(address, "wrong").await, 403);
+    }
+    assert_eq!(attempt_over_tcp(address, "correct horse").await, 429, "this computer is now blocked");
+    // A caller from anywhere else is not.
+    assert_eq!(attempt(&server, "198.51.100.20", "correct horse").await, StatusCode::CREATED);
+    assert_eq!(server.state.failures.lock().unwrap().remembered(), 1);
+}
+
+#[tokio::test]
+async fn wrong_passwords_are_logged_with_the_callers_address_and_nothing_else_is() {
+    let server = password_server().await;
+    server.state.failure_log.capture();
+
+    // People who get in, by password or by invite, leave no trace.
+    assert_eq!(attempt(&server, "198.51.100.20", "correct horse").await, StatusCode::CREATED);
+    let invite = server.invite(1, 3600).await;
+    let (status, _) = server.register_from(Some("198.51.100.21"), &SoftDevice::new(), json!({ "token": invite })).await;
+    assert_eq!(status, StatusCode::CREATED);
+    // Nor does a wrong invite: only the password way in is logged.
+    let (status, _) = server.register_from(Some("198.51.100.22"), &SoftDevice::new(), json!({ "token": "x" })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(server.state.failure_log.captured(), Vec::<String>::new());
+
+    for _ in 0..10 {
+        attempt(&server, "203.0.113.7", "wrong").await;
+    }
+    attempt(&server, "203.0.113.7", "wrong").await;
+    let lines = server.state.failure_log.captured();
+    assert_eq!(lines.len(), 11);
+    let now = deaddropd::logging::utc(server.state.clock.now());
+    for line in &lines[..10] {
+        assert!(line.ends_with(" password-failure from=203.0.113.7"), "{line}");
+        assert_eq!(&line[..11], &now[..11], "the line starts with today's date in UTC");
+    }
+    assert!(lines[10].ends_with(" password-refused from=203.0.113.7"), "{}", lines[10]);
+}
+
+#[tokio::test]
+async fn a_password_guess_on_a_server_without_a_password_is_logged_too() {
+    let server = Server::new().await;
+    server.state.failure_log.capture();
+    assert_eq!(attempt(&server, "203.0.113.7", "guess").await, StatusCode::FORBIDDEN);
+    assert_eq!(server.state.failure_log.captured().len(), 1);
 }

@@ -1,6 +1,7 @@
 //! What every handler shares.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,6 +10,7 @@ use deaddrop_core::encoding::{random_id, random_token};
 use tokio::sync::broadcast;
 
 use crate::error::ApiResult;
+use crate::logging::FailureLog;
 use crate::store::{self, Store};
 
 /// Unix time in seconds. Tests move it forward instead of sleeping.
@@ -37,26 +39,67 @@ pub enum Wake {
     Changed,
 }
 
-/// Wrong server passwords in the last minute, across everyone. The server deliberately
-/// does not know who is asking, so guessing is slowed for all rather than per caller.
-#[derive(Default)]
-pub struct FailureWindow {
-    times: VecDeque<i64>,
+/// Where a request came from, as far as the password limit cares. An IPv6 caller is its
+/// /64 network, since one subscriber usually has a whole /64 of addresses to guess from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Caller {
+    V4(Ipv4Addr),
+    V6Network(u64),
+    /// The address is not known (it never is in tests that skip the network).
+    Unknown,
 }
 
-impl FailureWindow {
-    const LIMIT: usize = 10;
-    const WINDOW: i64 = 60;
-
-    pub fn blocked(&mut self, now: i64) -> bool {
-        while self.times.front().is_some_and(|&time| time <= now - Self::WINDOW) {
-            self.times.pop_front();
+impl Caller {
+    pub fn of(address: Option<IpAddr>) -> Caller {
+        match address.map(|address| address.to_canonical()) {
+            Some(IpAddr::V4(v4)) => Caller::V4(v4),
+            Some(IpAddr::V6(v6)) => Caller::V6Network((u128::from(v6) >> 64) as u64),
+            None => Caller::Unknown,
         }
-        self.times.len() >= Self::LIMIT
+    }
+}
+
+/// Wrong server passwords, counted per network address, so someone guessing is stopped
+/// without locking anyone else out.
+///
+/// This is the one place the server looks at an address. The count is held in memory
+/// only and forgotten ten minutes after the last wrong guess from that address; each
+/// wrong guess is also logged for firewall tools (`logging::password_line`). A caller
+/// who gets the password right is never recorded anywhere.
+#[derive(Default)]
+pub struct Failures {
+    by_caller: HashMap<Caller, VecDeque<i64>>,
+}
+
+impl Failures {
+    pub const LIMIT: usize = 10;
+    pub const WINDOW: i64 = 600;
+
+    /// Whether `caller` has used up their wrong guesses for now.
+    pub fn blocked(&mut self, caller: Caller, now: i64) -> bool {
+        let Some(times) = self.by_caller.get_mut(&caller) else { return false };
+        while times.front().is_some_and(|&time| time <= now - Self::WINDOW) {
+            times.pop_front();
+        }
+        if times.is_empty() {
+            self.by_caller.remove(&caller);
+            return false;
+        }
+        times.len() >= Self::LIMIT
     }
 
-    pub fn record(&mut self, now: i64) {
-        self.times.push_back(now);
+    pub fn record(&mut self, caller: Caller, now: i64) {
+        self.by_caller.entry(caller).or_default().push_back(now);
+    }
+
+    /// Drops every caller whose wrong guesses are all older than the window.
+    pub fn forget_old(&mut self, now: i64) {
+        self.by_caller.retain(|_, times| times.back().is_some_and(|&time| time > now - Self::WINDOW));
+    }
+
+    /// How many callers are remembered right now.
+    pub fn remembered(&self) -> usize {
+        self.by_caller.len()
     }
 }
 
@@ -66,7 +109,9 @@ pub struct AppState {
     pub clock: Clock,
     /// A random name this server gave itself; devices sign it into every sign-in.
     pub server_id: Arc<str>,
-    pub failures: Arc<Mutex<FailureWindow>>,
+    pub failures: Arc<Mutex<Failures>>,
+    /// Where wrong server passwords are logged, with the caller's address.
+    pub failure_log: FailureLog,
     wake: broadcast::Sender<(Arc<str>, Wake)>,
 }
 
@@ -91,8 +136,14 @@ impl AppState {
             })
             .await?;
         let (wake, _) = broadcast::channel(1024);
-        let state =
-            AppState { store, clock: Clock::default(), server_id: server_id.into(), failures: Arc::default(), wake };
+        let state = AppState {
+            store,
+            clock: Clock::default(),
+            server_id: server_id.into(),
+            failures: Arc::default(),
+            failure_log: FailureLog::default(),
+            wake,
+        };
         Ok((state, operator_token))
     }
 

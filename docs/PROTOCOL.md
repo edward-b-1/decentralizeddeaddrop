@@ -51,7 +51,7 @@ after that the device proves itself by signing a challenge with its key (as Pock
 | Method | How it works | Good for |
 |---|---|---|
 | **Open** | Anyone who can reach the server may register. | Private networks, testing |
-| **Server password** | One shared password (server keeps only an Argon2id hash; attempts rate-limited). | Small trusted groups |
+| **Server password** | One shared password (server keeps only an Argon2id hash). Wrong guesses are limited per network address. | Small trusted groups |
 | **Invite token** | Operator creates tokens: single-use or limited-use, with an expiry. Carried in the invite link. | The normal case |
 | **Approval** | The device registers as pending; the operator sees its ID and approves it. | Strict servers |
 
@@ -203,6 +203,11 @@ same rules.
 
 Logging follows Pocket Radio's rule: nothing that identifies a user or device is logged
 (no IDs, addresses, tokens or channel names).
+
+One exception, decided 2026-11-26: to stop someone guessing the server password, the
+server counts **wrong** password attempts per network address for ten minutes, and logs
+each one with the address so that a firewall tool can ban the guesser. Someone who knows
+the password is never recorded, and neither is anyone using another way in.
 
 ## 9. Receiving messages in the background
 

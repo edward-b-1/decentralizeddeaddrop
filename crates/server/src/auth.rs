@@ -2,7 +2,10 @@
 //! afterwards (challenge, signature, session token).
 
 use axum::Json;
-use axum::extract::{FromRequestParts, State};
+use std::convert::Infallible;
+use std::net::{IpAddr, SocketAddr};
+
+use axum::extract::{ConnectInfo, FromRequestParts, State};
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
@@ -13,8 +16,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::error::{ApiError, ApiResult};
+use crate::logging::{PasswordEvent, password_line};
 use crate::password;
-use crate::state::{self, AppState, Wake};
+use crate::state::{self, AppState, Caller, Wake};
 use crate::store::{self, sha256};
 
 const CHALLENGE_SECONDS: i64 = 120;
@@ -73,6 +77,19 @@ pub async fn authenticate(state: &AppState, token: &str) -> ApiResult<Auth> {
         .await
 }
 
+/// The network address a request came from. Only registration asks for it, and only
+/// uses it when a server password is wrong.
+pub struct Peer(pub Option<IpAddr>);
+
+impl<S: Sync> FromRequestParts<S> for Peer {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Peer, Infallible> {
+        let address = parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|info| info.0.ip());
+        Ok(Peer(address))
+    }
+}
+
 /// `GET /v1/server`: what a phone needs to know before registering.
 pub async fn server_info(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let settings = state.store.run(|db| Ok(store::load_settings(db)?)).await?;
@@ -102,6 +119,7 @@ pub struct Register {
 /// `POST /v1/devices`: register a device through one of the ways in.
 pub async fn register(
     State(state): State<AppState>,
+    Peer(address): Peer,
     Json(body): Json<Register>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     const BAD_KEYS: ApiError = ApiError::bad("keys must be P-256, with the agreement key signed by the signing key");
@@ -122,10 +140,12 @@ pub async fn register(
     if body.token.is_none()
         && let Some(candidate) = body.password.clone()
     {
-        if state.failures.lock().unwrap().blocked(now) {
+        let caller = Caller::of(address);
+        if state.failures.lock().unwrap().blocked(caller, now) {
+            state.failure_log.write(password_line(now, PasswordEvent::Refused, address));
             return Err(ApiError::new(
                 StatusCode::TOO_MANY_REQUESTS,
-                "too many wrong passwords; try again in a minute",
+                "too many wrong passwords; try again in ten minutes",
             ));
         }
         let settings = state.store.run(|db| Ok(store::load_settings(db)?)).await?;
@@ -134,7 +154,8 @@ pub async fn register(
                 tokio::task::spawn_blocking(move || password::verify(&candidate, &stored)).await.unwrap_or(false);
         }
         if !password_ok {
-            state.failures.lock().unwrap().record(now);
+            state.failures.lock().unwrap().record(caller, now);
+            state.failure_log.write(password_line(now, PasswordEvent::Failure, address));
             return Err(NOT_ACCEPTED);
         }
     }

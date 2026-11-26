@@ -1,8 +1,11 @@
 //! A server in memory and soft "phones" to drive it, shared by the integration tests.
 #![allow(dead_code)]
 
+use std::net::{IpAddr, SocketAddr};
+
 use axum::Router;
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Method, Request, StatusCode, header};
 use deaddrop_core::encoding::{b64, random_id};
 use deaddrop_core::keys;
@@ -48,6 +51,18 @@ pub async fn call(
     token: Option<&str>,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    call_from(router, None, method, path, token, body).await
+}
+
+/// Like [`call`], but as if the request arrived from network address `from`.
+pub async fn call_from(
+    router: &Router,
+    from: Option<IpAddr>,
+    method: Method,
+    path: &str,
+    token: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(token) = token {
         request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
@@ -57,6 +72,10 @@ pub async fn call(
         None => request.body(Body::empty()),
     }
     .unwrap();
+    let mut request = request;
+    if let Some(address) = from {
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(address, 40000)));
+    }
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -103,11 +122,17 @@ impl Server {
     }
 
     pub async fn register(&self, device: &SoftDevice, extra: Value) -> (StatusCode, Value) {
+        self.register_from(None, device, extra).await
+    }
+
+    /// Registers as if from network address `from`.
+    pub async fn register_from(&self, from: Option<&str>, device: &SoftDevice, extra: Value) -> (StatusCode, Value) {
         let mut body = registration(device);
         for (key, value) in extra.as_object().unwrap() {
             body[key] = value.clone();
         }
-        self.anon(POST, "/v1/devices", Some(body)).await
+        let from = from.map(|address| address.parse().unwrap());
+        call_from(&self.router, from, POST, "/v1/devices", None, Some(body)).await
     }
 
     pub async fn sign_in(&self, device: &SoftDevice) -> Result<String, StatusCode> {

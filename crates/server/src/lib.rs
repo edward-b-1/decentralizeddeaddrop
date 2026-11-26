@@ -4,13 +4,14 @@
 mod auth;
 mod channels;
 pub mod error;
-mod logging;
+pub mod logging;
 mod operator;
 mod password;
 mod queue;
 pub mod state;
 pub mod store;
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
@@ -52,9 +53,22 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// Serves the API on `listener` until `shutdown` completes. Each request carries the
+/// network address it came from, which only the wrong-password limit ever looks at.
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown)
+        .await
+}
+
 /// Wipes messages past their maximum age, now. Returns how many went.
 pub async fn sweep(state: &AppState) -> error::ApiResult<usize> {
     let now = state.clock.now();
+    state.failures.lock().unwrap().forget_old(now);
     state.store.run(move |db| Ok(queue::sweep(db, now)?)).await
 }
 

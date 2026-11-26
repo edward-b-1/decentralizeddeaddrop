@@ -92,11 +92,10 @@ async fn main() -> ExitCode {
         }
     };
     println!("deaddropd listening on http://{} (plain HTTP: put TLS in front before exposing it)", args.listen);
-    let served = axum::serve(listener, deaddropd::router(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await;
+    let served = deaddropd::serve(listener, state, async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await;
     if served.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 

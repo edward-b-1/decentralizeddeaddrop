@@ -27,6 +27,30 @@ at all. Database errors are logged as the words "database error" in release buil
 GET /v1/channels/{channel} 401 0ms
 ```
 
+### The one exception: wrong server passwords
+
+A wrong server password is logged with the time (UTC) and the address it came from, so a
+firewall tool can ban whoever is guessing:
+
+```
+2026-11-26T18:20:05Z password-failure from=203.0.113.7
+2026-11-26T18:20:09Z password-refused from=203.0.113.7
+```
+
+- `password-failure`: the password was wrong.
+- `password-refused`: the attempt was turned away unchecked, because that address had
+  already sent ten wrong passwords in ten minutes.
+
+Nothing else is ever logged with an address. Someone who knows the password does not
+appear, nor does anyone using an invite or any other way in.
+
+An example fail2ban filter (not yet tested against a real fail2ban):
+
+```
+[Definition]
+failregex = ^\S+ password-(?:failure|refused) from=<HOST>$
+```
+
 ## API (version 1)
 
 JSON over HTTP. Everything except the first four routes needs
@@ -63,8 +87,14 @@ is the signing key's signature over `deaddrop/agreement-key/v1\n<base64 agreemen
 | POST | `/v1/operator/devices/{device}/approve` | Approve a pending device |
 | DELETE | `/v1/operator/devices/{device}` | Remove a device from the server |
 
-A new server accepts invite tokens only. Wrong server passwords are limited to ten a
-minute across all callers, since the server keeps nothing that tells callers apart.
+A new server accepts invite tokens only.
+
+**Wrong server passwords** are limited to ten in ten minutes per network address (per /64
+network for IPv6). After that the address is refused the password way in until ten
+minutes after its last wrong guess. This is the only use the server makes of an address:
+the count is held in memory only, each wrong guess is logged (see Logs), and a caller who
+gets the password right is never recorded. If a proxy is put in front of the server, every
+caller appears to come from the proxy, and the limit becomes one shared limit.
 
 ### Channels
 
