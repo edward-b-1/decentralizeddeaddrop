@@ -252,7 +252,9 @@ the server cannot quietly change it.
 Consequences, by design:
 - **The server has no history.** A new member, or a new phone, sees nothing from before.
 - **A lost phone loses its messages.** No cloud backup.
-- *Not built yet:* telling a sender which members a message expired for.
+- **No delivery reports and no read receipts** (decided 2026-11-26). A sender is not told
+  when, or whether, anyone collected a message. The server keeps nothing about a message
+  once it is wiped.
 - "Wiped" means the row is overwritten with zeros in the database and the database's log
   is folded away at once; a test searches the files for the bytes. What the disk hardware
   keeps underneath (SSDs remap blocks) is outside the server's control, which is one more

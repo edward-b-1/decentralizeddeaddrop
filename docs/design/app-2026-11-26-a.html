@@ -1,0 +1,359 @@
+<title>Dead Drop app mockup A</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Roboto:wght@400;500&display=swap">
+<style>
+  /* Layout: rows of 360dp phone frames, each with a caption above it; open questions listed below. */
+  :root {
+    --page: #E3E7EE; --ink: #141A24; --ink-soft: #465162;
+    --screen: #F5F7FA; --surface: #FFFFFF; --surface-2: #E9EDF4; --line: #D3D9E3; --muted: #586373;
+    --accent: #264A9A; --accent-soft: #DBE4F8; --on-accent: #FFFFFF;
+    --ok: #1B7245; --wait: #8F5B00; --danger: #B3261E; --off: #8A93A1;
+    --bezel: #1B1F27; --mine: #DBE4F8; --theirs: #FFFFFF; --shadow: rgba(20, 26, 36, .18);
+    --font-page: "IBM Plex Sans", system-ui, "Segoe UI", sans-serif;
+    --font-app: Roboto, system-ui, "Segoe UI", sans-serif;
+    --font-code: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --page: #0B0E13; --ink: #E6EAF1; --ink-soft: #AAB4C3;
+      --screen: #11151C; --surface: #1A202A; --surface-2: #222A36; --line: #2F3846; --muted: #98A3B4;
+      --accent: #9DB8FF; --accent-soft: #24345C; --on-accent: #0E1A3A;
+      --ok: #6FD3A0; --wait: #F0B95B; --danger: #FF8A80; --off: #6B7483;
+      --bezel: #000000; --mine: #24345C; --theirs: #1A202A; --shadow: rgba(0, 0, 0, .5);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page: #0B0E13; --ink: #E6EAF1; --ink-soft: #AAB4C3;
+    --screen: #11151C; --surface: #1A202A; --surface-2: #222A36; --line: #2F3846; --muted: #98A3B4;
+    --accent: #9DB8FF; --accent-soft: #24345C; --on-accent: #0E1A3A;
+    --ok: #6FD3A0; --wait: #F0B95B; --danger: #FF8A80; --off: #6B7483;
+    --bezel: #000000; --mine: #24345C; --theirs: #1A202A; --shadow: rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--page); color: var(--ink); font-family: var(--font-page); font-size: 15px; line-height: 1.5;
+    padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 28px 56px;
+  }
+  .wrap { max-width: 1560px; margin: 0 auto; display: flex; flex-direction: column; gap: 36px; }
+  .intro h1 { margin: 0 0 8px; font-size: 26px; font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+  .intro p { margin: 0; max-width: 68ch; color: var(--ink-soft); }
+  .band h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .band > p { margin: 0 0 18px; color: var(--ink-soft); max-width: 68ch; }
+  .row { display: flex; flex-wrap: wrap; gap: 32px 28px; }
+  figure { margin: 0; width: 360px; max-width: 100%; display: flex; flex-direction: column; gap: 10px; }
+  figcaption { font-size: 14px; line-height: 1.45; color: var(--ink-soft); min-height: 84px; }
+  figcaption b { display: block; font-size: 15px; font-weight: 600; color: var(--ink); }
+
+  /* ---------- the phone ---------- */
+  .phone {
+    width: 100%; height: 760px; background: var(--screen); color: var(--ink); border: 8px solid var(--bezel); border-radius: 30px;
+    overflow: hidden; display: flex; flex-direction: column; font-family: var(--font-app); font-size: 15px; line-height: 1.35;
+    box-shadow: 0 12px 32px var(--shadow);
+  }
+  .status { flex: none; height: 28px; display: flex; justify-content: space-between; align-items: center; padding: 0 18px; font-size: 12px; color: var(--muted); }
+  .tabs { flex: none; display: flex; background: var(--surface-2); padding: 6px 6px 0; }
+  .tabs div { flex: 1; text-align: center; font-size: 14px; padding: 9px 0 10px; color: var(--muted); border-bottom: 3px solid transparent; }
+  .tabs .on { color: var(--accent); font-weight: 500; border-bottom-color: var(--accent); }
+  .appbar { flex: none; display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 10px; background: var(--surface-2); }
+  .appbar .title { flex: 1; min-width: 0; font-size: 18px; font-weight: 500; }
+  .appbar .title small { display: block; font-size: 12.5px; font-weight: 400; color: var(--muted); }
+  .icon { width: 24px; height: 24px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .content { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 16px 16px; }
+  .foot { flex: none; display: flex; gap: 10px; padding: 10px 16px 14px; background: var(--screen); border-top: 1px solid var(--line); }
+
+  .h { font-size: 12.5px; font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: var(--accent); margin: 18px 0 4px; }
+  .note { font-size: 13px; color: var(--muted); line-height: 1.45; margin: 6px 0; }
+  .item { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .item:last-child { border-bottom: none; }
+  .item .t { flex: 1; min-width: 0; }
+  .item .t small { display: block; font-size: 13px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  .item .v { font-size: 14px; color: var(--muted); flex: none; }
+  .chev { width: 18px; height: 18px; flex: none; stroke: var(--muted); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .danger { color: var(--danger); }
+  .hl { background: var(--accent-soft); border-radius: 12px; margin: 4px -8px; padding: 11px 8px; border-bottom: none; }
+
+  .btn { flex: 1; font: inherit; font-size: 14.5px; font-weight: 500; padding: 11px 12px; border-radius: 22px; border: 1px solid var(--accent); background: none; color: var(--accent); cursor: pointer; text-align: center; }
+  .btn.primary { background: var(--accent); color: var(--on-accent); }
+  .btn.block { display: block; width: 100%; margin-top: 12px; }
+  .btn:focus-visible, .switch:focus-visible, .radio:focus-visible, .seg button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  .light { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--off); }
+  .light.ok { background: var(--ok); } .light.wait { background: var(--wait); }
+  .server { display: flex; align-items: center; gap: 8px; margin: 18px 0 2px; }
+  .server b { font-size: 13.5px; font-weight: 500; }
+  .server span { font-size: 12.5px; color: var(--muted); margin-left: auto; font-family: var(--font-code); }
+  .server em { font-style: normal; font-size: 12.5px; color: var(--wait); margin-left: auto; }
+  .chan { display: flex; gap: 12px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--line); }
+  .chan .t { flex: 1; min-width: 0; }
+  .chan .t b { font-weight: 500; display: block; }
+  .chan .t span { display: block; font-size: 13.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chan .when { font-size: 12px; color: var(--muted); text-align: right; flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  .badge { background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 500; min-width: 20px; height: 20px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; padding: 0 6px; }
+  .chan .pending { font-style: italic; }
+
+  /* conversation */
+  .talk { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; }
+  .sys { align-self: center; font-size: 12.5px; color: var(--muted); text-align: center; max-width: 280px; line-height: 1.4; }
+  .msg { max-width: 82%; display: flex; flex-direction: column; gap: 2px; }
+  .msg .who { font-size: 12.5px; color: var(--accent); font-weight: 500; }
+  .msg .bubble { padding: 8px 11px; border-radius: 14px; background: var(--theirs); border: 1px solid var(--line); }
+  .msg .meta { font-size: 12px; color: var(--muted); }
+  .msg.me { align-self: flex-end; align-items: flex-end; }
+  .msg.me .bubble { background: var(--mine); border-color: transparent; }
+  .msg .meta .ok { color: var(--ok); } .msg .meta .wait { color: var(--wait); }
+  .composer { flex: none; display: flex; gap: 8px; align-items: center; padding: 8px 10px 12px 14px; border-top: 1px solid var(--line); background: var(--screen); }
+  .composer .field { flex: 1; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 9px 14px; color: var(--muted); }
+  .composer .send { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; flex: none; }
+
+  /* controls */
+  .switch { flex: none; width: 46px; height: 26px; border-radius: 13px; border: 1.5px solid var(--off); background: none; position: relative; cursor: pointer; padding: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%; background: var(--off); transition: transform .15s; }
+  .switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+  .switch[aria-checked="true"]::after { background: var(--on-accent); transform: translateX(20px); }
+  @media (prefers-reduced-motion: reduce) { .switch::after { transition: none; } }
+  .radio { display: flex; align-items: center; gap: 12px; width: 100%; font: inherit; color: inherit; background: none; border: none; border-bottom: 1px solid var(--line); padding: 11px 0; cursor: pointer; text-align: left; }
+  .radio::before { content: ""; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--off); flex: none; }
+  .radio[aria-checked="true"]::before { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 5px, transparent 6px); }
+  .radio small { margin-left: auto; font-size: 13px; color: var(--muted); }
+  .seg { display: flex; border: 1px solid var(--off); border-radius: 20px; overflow: hidden; margin: 6px 0 10px; }
+  .seg button { flex: 1; border: none; background: none; padding: 9px 4px; font: inherit; font-size: 13.5px; color: var(--ink); cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--off); }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+  .input { display: block; margin: 10px 0 0; }
+  .input span { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 4px; }
+  .input div { border: 1px solid var(--off); border-radius: 8px; padding: 10px 12px; background: var(--surface); min-height: 42px; }
+  .input div.code { font-family: var(--font-code); font-size: 14px; }
+  .two { display: flex; gap: 10px; } .two .input:first-child { flex: 1; } .two .input:last-child { width: 96px; }
+  .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; margin: 18px 0 2px; }
+  .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .fp { font-family: var(--font-code); font-size: 17px; line-height: 1.9; letter-spacing: .02em; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; grid-template-columns: repeat(4, 1fr); text-align: center; margin: 12px 0; font-variant-numeric: tabular-nums; }
+  .big { font-size: 17px; font-weight: 500; margin: 18px 0 4px; }
+
+  .questions { max-width: 76ch; }
+  .questions h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+  .questions ol { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; }
+  .questions li b { font-weight: 600; }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M5 12h13M12 6l6 6-6 6"/></symbol>
+  <symbol id="i-qr" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18v2"/></symbol>
+</svg>
+
+<div class="wrap">
+  <header class="intro">
+    <h1>Decentralized Dead Drop: app mockup A</h1>
+    <p>A first pass at the main screens, for you to react to. The switches, choices and tabs inside the phones can be tapped. Nothing here is built yet. Example names and addresses are made up.</p>
+  </header>
+
+  <section class="band">
+    <h2>Everyday use</h2>
+    <p>What someone sees when they open the app, read and reply.</p>
+    <div class="row">
+
+      <figure>
+        <figcaption><b>1. Channels</b>The opening screen. Every channel on every server in one list, grouped under the server it lives on. Each server has a status light. Tabs are at the top, as in Pocket Radio.</figcaption>
+        <div class="phone">
+          <div class="status"><span>18:45</span><span>5G &nbsp;82%</span></div>
+          <div class="tabs"><div class="on">Channels</div><div>Servers</div><div>Settings</div></div>
+          <div class="content">
+            <div class="server"><i class="light ok"></i><b>Home server</b><span>203.0.113.7</span></div>
+            <div class="chan"><div class="t"><b>Family</b><span>Sam: Landed, see you at 7</span></div><div class="when">18:42<span class="badge">2</span></div></div>
+            <div class="chan"><div class="t"><b>Allotment committee</b><span>You: Minutes to follow tomorrow</span></div><div class="when">Tue</div></div>
+            <div class="chan"><div class="t"><b>Priya</b><span>Priya: Thanks, got it</span></div><div class="when">Mon</div></div>
+
+            <div class="server"><i class="light wait"></i><b>Climbing club</b><em>Reconnecting…</em></div>
+            <div class="chan"><div class="t"><b>Thursday crew</b><span>Jo: Who has the rope?</span></div><div class="when">09:15<span class="badge">5</span></div></div>
+            <div class="chan"><div class="t"><b>Trip planning</b><span class="pending">Waiting for the owner to let you in</span></div><div class="when"></div></div>
+          </div>
+          <div class="foot"><button class="btn" type="button">Join with an invite</button><button class="btn primary" type="button">New channel</button></div>
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption><b>2. A channel</b>Your own messages show where they are: still waiting on the server for some members, or delivered to everyone and wiped. Grey lines mark changes to who is in the channel.</figcaption>
+        <div class="phone">
+          <div class="status"><span>18:45</span><span>5G &nbsp;82%</span></div>
+          <div class="appbar"><svg class="icon"><use href="#i-back"/></svg><div class="title">Family<small>Home server · 5 members</small></div><svg class="icon"><use href="#i-info"/></svg></div>
+          <div class="content">
+            <div class="talk">
+              <div class="sys">Messages wait on the server for up to 24 hours, then are wiped.</div>
+              <div class="msg"><span class="who">Dad</span><div class="bubble">Is anyone collecting Gran on Sunday?</div><span class="meta">18:30</span></div>
+              <div class="msg me"><div class="bubble">I can. What time?</div><span class="meta">18:31 · <span class="ok">Delivered to everyone</span></span></div>
+              <div class="msg"><span class="who">Sam</span><div class="bubble">Landed, see you at 7</div><span class="meta">18:42</span></div>
+              <div class="sys">Robin added Alex to the channel. Alex sees messages from here on.</div>
+              <div class="msg me"><div class="bubble">Bringing the big car, so there is room for everyone</div><span class="meta">18:44 · <span class="wait">Waiting for Gran and Alex</span></span></div>
+            </div>
+          </div>
+          <div class="composer"><div class="field">Message</div><div class="send"><svg class="icon"><use href="#i-send"/></svg></div></div>
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption><b>3. Channel details</b>Shown as the channel's owner sees it. Members and join requests open their own screens, so a long list never pushes the red buttons out of sight.</figcaption>
+        <div class="phone">
+          <div class="status"><span>18:45</span><span>5G &nbsp;82%</span></div>
+          <div class="appbar"><svg class="icon"><use href="#i-back"/></svg><div class="title">Family<small>Home server</small></div></div>
+          <div class="content">
+            <div class="item hl"><div class="t">Join requests<small>Gran's new phone is asking to join</small></div><span class="badge">1</span><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="h">This channel</div>
+            <div class="item"><div class="t">Channel name</div><span class="v">Family</span><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="item"><div class="t">Your name here</div><span class="v">Robin</span><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="item"><div class="t">Maximum message age<small>Undelivered messages are wiped from the server after this</small></div><span class="v">24 hours</span><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="h">People</div>
+            <div class="item"><div class="t">Members<small>You own this channel</small></div><span class="v">5</span><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="item"><div class="t">Invite someone<small>Make a link or QR code</small></div><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="item"><div class="t">Safety numbers<small>Check you are talking to the right people</small></div><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="h">&nbsp;</div>
+            <div class="item"><div class="t danger">Delete channel<small>Removes it for everyone. Cannot be undone.</small></div></div>
+          </div>
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption><b>4. Maximum message age</b>The per-channel setting. Only the owner can change it; members see the same screen without the choices.</figcaption>
+        <div class="phone">
+          <div class="status"><span>18:45</span><span>5G &nbsp;82%</span></div>
+          <div class="appbar"><svg class="icon"><use href="#i-back"/></svg><div class="title">Maximum message age<small>Family</small></div></div>
+          <div class="content">
+            <p class="note">A message is wiped from the server as soon as everyone has received it, or when it reaches this age, whichever comes first.</p>
+            <div role="radiogroup" aria-label="Maximum message age" id="age">
+              <button class="radio" type="button" role="radio" aria-checked="false">1 hour</button>
+              <button class="radio" type="button" role="radio" aria-checked="false">6 hours</button>
+              <button class="radio" type="button" role="radio" aria-checked="true">24 hours</button>
+              <button class="radio" type="button" role="radio" aria-checked="false">3 days</button>
+              <button class="radio" type="button" role="radio" aria-checked="false">7 days</button>
+              <button class="radio" type="button" role="radio" aria-checked="false">30 days</button>
+              <button class="radio" type="button" role="radio" aria-checked="false">Another length<small>Set…</small></button>
+            </div>
+            <p class="note">A phone that stays off or out of signal for longer than this will miss what was sent in the meantime.</p>
+          </div>
+          <div class="foot"><button class="btn" type="button">Cancel</button><button class="btn primary" type="button">OK</button></div>
+        </div>
+      </figure>
+
+    </div>
+  </section>
+
+  <section class="band">
+    <h2>Servers</h2>
+    <p>Adding a server, checking it is the right one, and running your own.</p>
+    <div class="row">
+
+      <figure>
+        <figcaption><b>5. Add a server</b>A QR code or link carries the address, the fingerprint and the way in, so most people never type anything. Typing by hand is there for when no link exists.</figcaption>
+        <div class="phone">
+          <div class="status"><span>18:45</span><span>5G &nbsp;82%</span></div>
+          <div class="appbar"><svg class="icon"><use href="#i-back"/></svg><div class="title">Add a server</div></div>
+          <div class="content">
+            <button class="btn primary block" type="button" style="display:flex;align-items:center;justify-content:center;gap:8px"><svg class="icon"><use href="#i-qr"/></svg>Scan a QR code</button>
+            <button class="btn block" type="button">Paste a link</button>
+            <div class="or">or type it in</div>
+            <div class="two">
+              <div class="input"><span>Address</span><div class="code">203.0.113.7</div></div>
+              <div class="input"><span>Port</span><div class="code">7443</div></div>
+            </div>
+            <div class="h">Way in</div>
+            <div class="seg" id="wayin">
+              <button type="button" aria-pressed="true" data-label="Invite token">Invite token</button>
+              <button type="button" aria-pressed="false" data-label="Server password">Password</button>
+              <button type="button" aria-pressed="false" data-label="">None</button>
+            </div>
+            <div class="input" id="secret"><span id="secret-label">Invite token</span><div class="code">k7f3 9qx2 …</div></div>
+            <p class="note">The person who runs the server tells you which of these it uses.</p>
+          </div>
+          <div class="foot"><button class="btn primary" type="button">Connect</button></div>
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption><b>6. Check the server</b>Shown only when the address was typed by hand, so there was no fingerprint to check against. From a link or QR code the app checks by itself and this screen never appears.</figcaption>
+        <div class="phone">
+          <div class="status"><span>18:45</span><span>5G &nbsp;82%</span></div>
+          <div class="appbar"><svg class="icon"><use href="#i-back"/></svg><div class="title">Check this server<small>203.0.113.7 : 7443</small></div></div>
+          <div class="content">
+            <div class="big">Is this the right server?</div>
+            <p class="note">Compare this fingerprint with the one the person running the server gave you.</p>
+            <div class="fp"><span>wmcc</span><span>hgov</span><span>ezu6</span><span>vnuy</span><span>xkuy</span><span>72o3</span><span>bscf</span><span>b64d</span><span>qgl7</span><span>xp4h</span><span>bptm</span><span>5rfn</span><span>yqiq</span></div>
+            <p class="note"><b>If every group matches,</b> this is their server and nobody is in between.</p>
+            <p class="note"><b>If anything differs,</b> do not connect. Someone else is answering at this address.</p>
+            <p class="note">The app remembers the fingerprint. If it ever changes, you will be warned before anything is sent.</p>
+          </div>
+          <div class="foot"><button class="btn" type="button">It does not match</button><button class="btn primary" type="button">It matches</button></div>
+        </div>
+      </figure>
+
+      <figure>
+        <figcaption><b>7. A server you run</b>What the operator sees. Other members see only the top part and "Remove from this phone". The operator has no way into channels they are not a member of.</figcaption>
+        <div class="phone">
+          <div class="status"><span>18:45</span><span>5G &nbsp;82%</span></div>
+          <div class="appbar"><svg class="icon"><use href="#i-back"/></svg><div class="title">Home server<small>You run this server</small></div></div>
+          <div class="content">
+            <div class="item"><i class="light ok"></i><div class="t">Connected<small>203.0.113.7 : 7443</small></div></div>
+            <div class="item"><div class="t">Fingerprint<small>Show it, to read out or compare</small></div><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="item hl"><div class="t">Waiting for approval<small>1 new device</small></div><span class="badge">1</span><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="h">Ways in</div>
+            <div class="item"><div class="t">Invite tokens<small>From a link or QR code you make</small></div><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Invite tokens"></button></div>
+            <div class="item"><div class="t">Server password<small>Not set</small></div><button class="switch" type="button" role="switch" aria-checked="false" aria-label="Server password"></button></div>
+            <div class="item"><div class="t">Open to anyone<small>No token or password needed</small></div><button class="switch" type="button" role="switch" aria-checked="false" aria-label="Open to anyone"></button></div>
+            <div class="item"><div class="t">Approve new devices<small>Each one waits for you, whichever way it came in</small></div><button class="switch" type="button" role="switch" aria-checked="true" aria-label="Approve new devices"></button></div>
+            <button class="btn primary block" type="button">Invite a device</button>
+            <div class="h">&nbsp;</div>
+            <div class="item"><div class="t">Devices on this server</div><span class="v">7</span><svg class="chev"><use href="#i-chev"/></svg></div>
+            <div class="item"><div class="t danger">Remove from this phone</div></div>
+          </div>
+        </div>
+      </figure>
+
+    </div>
+  </section>
+
+  <section class="questions">
+    <h2>Choices this mockup makes</h2>
+    <ol>
+      <li><b>One list of channels across all servers</b> (screen 1), instead of choosing a server first and then a channel.</li>
+      <li><b>Delivery status under your own messages</b> (screen 2). The server does not report this yet. Adding it means each sender learns when the other members collected a message.</li>
+      <li><b>A conversation with one person is a channel with two members</b> and sits in the same list ("Priya" in screen 1).</li>
+      <li><b>Your name is set per channel</b> (screen 3), so you can be "Robin" in one and something else in another.</li>
+      <li><b>Settings screens have Cancel and OK</b> (screen 4) instead of saving as soon as something is tapped.</li>
+      <li><b>No fingerprint screen for links and QR codes</b> (screen 6): the app checks silently and only stops if the check fails.</li>
+    </ol>
+  </section>
+</div>
+
+<script>
+  // Switches flip.
+  document.querySelectorAll('.switch').forEach(function (el) {
+    el.addEventListener('click', function () {
+      el.setAttribute('aria-checked', el.getAttribute('aria-checked') === 'true' ? 'false' : 'true');
+    });
+  });
+  // One choice at a time in the maximum message age list.
+  document.querySelectorAll('#age .radio').forEach(function (el, _, all) {
+    el.addEventListener('click', function () {
+      all.forEach(function (other) { other.setAttribute('aria-checked', other === el ? 'true' : 'false'); });
+    });
+  });
+  // The way in decides which secret, if any, is asked for.
+  document.querySelectorAll('#wayin button').forEach(function (el, _, all) {
+    el.addEventListener('click', function () {
+      all.forEach(function (other) { other.setAttribute('aria-pressed', other === el ? 'true' : 'false'); });
+      var label = el.getAttribute('data-label');
+      document.getElementById('secret').hidden = !label;
+      document.getElementById('secret-label').textContent = label;
+    });
+  });
+  // Tabs highlight (the other tabs' screens are not drawn yet).
+  document.querySelectorAll('.tabs div').forEach(function (el, _, all) {
+    el.addEventListener('click', function () {
+      all.forEach(function (other) { other.classList.toggle('on', other === el); });
+    });
+  });
+</script>
