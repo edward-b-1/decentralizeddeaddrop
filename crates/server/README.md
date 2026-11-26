@@ -6,16 +6,53 @@ The Decentralized Dead Drop server: one program and one SQLite file. Design:
 ## Running
 
 ```
-deaddropd [serve] [--db FILE] [--listen ADDRESS:PORT]     defaults: deaddrop.db, 127.0.0.1:8080
+deaddropd [serve] [OPTIONS]
+deaddropd fingerprint [--db FILE] [--tls-cert FILE --tls-key FILE]
 deaddropd operator-token [--db FILE]
+
+--db FILE               Database file                      [default: deaddrop.db]
+--listen ADDRESS:PORT   Where to listen                    [default: 127.0.0.1:7443]
+--public HOST:PORT      The address phones use, to print ready-made links
+--tls-cert FILE         Certificate (PEM) from a certificate authority, with
+--tls-key FILE          its private key (PEM)
+--no-tls                Plain HTTP (development, or behind a local TLS proxy)
 ```
 
-On first start it prints a one-time **operator token**. The first device to register with
-that token runs the server. `operator-token` issues a new one (for a lost operator phone,
-or a second operator).
+On first start the server prints:
+- its **fingerprint**, which phones use to recognise it;
+- a one-time **operator token**: the first device to register with it runs the server;
+- with `--public`, a ready-made `deaddrop://` link holding both.
 
-**It speaks plain HTTP for now** and by default listens on this computer only. TLS and the
-server fingerprint (PROTOCOL.md §2) are not built; do not expose it to a network yet.
+`operator-token` issues a new token (for a lost operator phone, or a second operator).
+`fingerprint` prints the fingerprint again.
+
+By default the server listens on this computer only. To be reachable, give it an address
+such as `--listen 0.0.0.0:7443` and open that port in the firewall.
+
+## TLS and the fingerprint
+
+Every connection is TLS 1.3. Design: `docs/PROTOCOL.md` section 2.
+
+- With no options, the server makes its own key (`deaddrop.key.pem`) and self-signed
+  certificate (`deaddrop.cert.pem`) beside the database on first start. No hostname or
+  certificate authority is needed.
+- The **fingerprint** is the SHA-256 of the server's public key, in base32. To check it
+  independently:
+
+  ```
+  openssl x509 -in deaddrop.cert.pem -pubkey -noout | openssl pkey -pubin -outform der | sha256sum
+  ```
+
+  (that prints the same hash in hexadecimal).
+- **Back up the key file and keep it private.** It is the server's identity. If it is
+  lost, phones can no longer recognise the server and every member must add it again
+  from a new link. The server never replaces a missing key on its own; a missing
+  certificate is simply remade from the key.
+- With `--tls-cert` and `--tls-key` the server uses your own certificate and key, for
+  example from Let's Encrypt. Phones still go by the fingerprint, which stays the same
+  across renewals as long as the key is kept.
+- `crates/tls` holds the fingerprint code and the check a phone makes
+  (`pinned_client_config`).
 
 ## Logs
 

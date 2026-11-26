@@ -30,17 +30,37 @@ two servers has two unrelated identities (§4).
 A server is added by **address + port + a way in** (§3). The address is an IP address or a
 hostname, whichever the operator set up.
 
-**Knowing it is the right server.** Every server has a TLS certificate. Two cases:
-- *Hostname with a normal certificate* (e.g. Let's Encrypt): checked the usual way.
-- *IP address only, or a self-made certificate:* the app checks the **fingerprint** of the
-  server's key (SHA-256 of its public key) instead. The fingerprint travels in the invite
-  link or QR code. Typed by hand, the app shows the fingerprint to compare on first
-  connection and remembers it afterwards. A later change is a loud warning, never silent.
+**Knowing it is the right server.** Every connection is TLS 1.3. The server has a
+private key, and its **fingerprint** is the SHA-256 of the matching public key, written
+as 52 base32 characters (shown in groups of four). The fingerprint travels in every
+invite link and QR code.
+
+- A phone that has the fingerprint accepts **exactly the server that holds that key**.
+  It does not consult a certificate authority, and ignores the name and dates in the
+  certificate. So it works the same for an IP address and for a hostname.
+- The fingerprint is of the key, not the certificate. Renewing a certificate does not
+  change it; only a new key does.
+- Typed by hand with no fingerprint, the app shows the server's fingerprint to compare
+  on first connection and remembers it afterwards. A later change is a loud warning,
+  never silent.
+
+**The server's key.** On first start the server makes its own key and a self-signed
+certificate and keeps them beside the database (`deaddrop.key.pem`, `deaddrop.cert.pem`).
+An operator with a hostname and a certificate from an authority can supply those files
+instead (`--tls-cert`, `--tls-key`); the fingerprint works the same way.
+
+- **The key file is the server's identity.** Anyone who copies it can pose as the server
+  to phones (they still could not read messages, §3.1). Keep it private and backed up.
+- **If the key is lost,** the server cannot be recognised any more. The server will not
+  quietly make a new one: every member would have to add the server again from a new
+  link, so that is the operator's decision (delete the certificate file to start afresh).
+- If only the certificate file is lost, the server remakes it from the key and nothing
+  changes for anyone.
 
 Invite link (also the QR content), handled by the app itself, never by a website:
 
 ```
-deaddrop://HOST:PORT/#fp=<fingerprint>&auth=<method>&t=<token if any>
+deaddrop://HOST:PORT/#fp=<fingerprint>&t=<token if any>
 ```
 
 ## 3. Ways in (server authentication)
@@ -76,9 +96,10 @@ Two separate layers protect two different things:
 
 An attacker who takes over the server's IP address (through the network, the hosting
 company, or because the operator gave the address up and someone else was assigned it)
-does not have the server's private key, so the fingerprint check fails and the app refuses
-to connect. A fingerprint is stricter than a normal certificate here: a certificate
-authority will issue a certificate to whoever controls the address at that moment.
+does not have the server's private key. They can show the real server's certificate,
+which is public, but cannot complete the connection without the key, so the app refuses.
+A fingerprint is stricter than a normal certificate here: a certificate authority will
+issue a certificate to whoever controls the address at that moment.
 
 What remains, and how it is closed:
 - **First contact with a hand-typed address** has no fingerprint to check against. The app
@@ -298,13 +319,11 @@ service can be offered later as an opt-in.
 Built and tested: the four ways in and the operator (§3), sign-in by signed challenge,
 channel records, invites, join requests and rosters (§5), messaging keys, prekeys and the
 message encryption (§6, `crates/crypto`), the delivery queue with both ways out (§7), live
-delivery over a WebSocket, and logging that holds no identifiers except for wrong server
-passwords. End-to-end tests run whole clients through the server, including a server
+delivery over a WebSocket, TLS 1.3 with the server fingerprint (§2, `crates/tls`), and
+logging that holds no identifiers except for wrong server passwords. End-to-end tests run whole clients through the server, including a server
 that swaps keys and a removed member handed every sealed message.
 
 Not built yet:
-- **TLS and the server fingerprint** (§2). The server speaks plain HTTP and listens on
-  this computer only by default. Nothing should be deployed until this is done.
 - **The Android app**, and the bridge that lets it use `crates/core` and `crates/crypto`.
 - **Asking again for a lost hand-over** (§6), and recovering a private session that has
   gone out of step.

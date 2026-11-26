@@ -11,6 +11,7 @@ mod prekeys;
 mod queue;
 pub mod state;
 pub mod store;
+pub mod tls;
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -56,8 +57,33 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Serves the API on `listener` until `shutdown` completes. Each request carries the
-/// network address it came from, which only the wrong-password limit ever looks at.
+/// Serves the API over TLS on `listener` until `shutdown` completes, then gives open
+/// connections ten seconds to finish. Each request carries the network address it came
+/// from, which only the wrong-password limit ever looks at.
+pub async fn serve_tls(
+    listener: std::net::TcpListener,
+    state: AppState,
+    config: std::sync::Arc<rustls::ServerConfig>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    listener.set_nonblocking(true)?;
+    let handle = axum_server::Handle::new();
+    let stopper = handle.clone();
+    tokio::spawn(async move {
+        shutdown.await;
+        stopper.graceful_shutdown(Some(Duration::from_secs(10)));
+    });
+    let config = axum_server::tls_rustls::RustlsConfig::from_config(config);
+    axum_server::from_tcp_rustls(listener, config)?
+        .handle(handle)
+        // A connection that completes TLS and then says nothing is dropped.
+        .first_request_timeout(Duration::from_secs(30))
+        .serve(router(state).into_make_service_with_connect_info::<SocketAddr>())
+        .await
+}
+
+/// Serves the API over plain HTTP: for development, or behind a proxy on the same
+/// machine that provides TLS itself.
 pub async fn serve(
     listener: tokio::net::TcpListener,
     state: AppState,

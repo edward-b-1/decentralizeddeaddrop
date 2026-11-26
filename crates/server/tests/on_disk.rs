@@ -2,7 +2,7 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use axum::http::StatusCode;
 use common::*;
@@ -10,23 +10,6 @@ use deaddrop_core::encoding::{b64, random_id};
 use deaddrop_core::soft::SoftDevice;
 use deaddropd::{AppState, Store};
 use serde_json::json;
-
-/// A scratch directory that is removed again when the test ends.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new() -> Scratch {
-        let path = std::env::temp_dir().join(format!("deaddrop-test-{}", random_id()));
-        std::fs::create_dir(&path).unwrap();
-        Scratch(path)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 /// Whether `needle` appears anywhere in any file in `directory` (the database, its
 /// write-ahead log and anything else SQLite leaves there).

@@ -270,3 +270,20 @@ pub fn roster(channel: &str, version: u64, members: &[(&Phone, &str)]) -> Roster
 pub fn encoded(text: &str) -> String {
     b64(text.as_bytes())
 }
+
+/// A scratch directory that is removed again when the test ends.
+pub struct Scratch(pub std::path::PathBuf);
+
+impl Scratch {
+    pub fn new() -> Scratch {
+        let path = std::env::temp_dir().join(format!("deaddrop-test-{}", random_id()));
+        std::fs::create_dir(&path).unwrap();
+        Scratch(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

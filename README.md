@@ -11,6 +11,7 @@ app does not. It has had no independent security review. Do not rely on it yet.
 - `docs/PROTOCOL.md`: the design, and what is and is not built.
 - `crates/core`: formats shared by the server, test clients and (later) the app.
 - `crates/crypto`: the end-to-end encryption, built on the vodozemac library.
+- `crates/tls`: the server fingerprint, and the check a phone makes with it.
 - `crates/server`: the server, `deaddropd`. See its README for running it and the API.
 
 ## Building
