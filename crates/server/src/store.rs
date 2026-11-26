@@ -37,6 +37,23 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires    INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+-- A device's messaging keys (a record signed by the device) and its prekeys. All
+-- public keys: the server hands them to other members and can do nothing else with them.
+CREATE TABLE IF NOT EXISTS messaging_keys (
+    device    TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,
+    record    TEXT NOT NULL,
+    signature TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE IF NOT EXISTS prekeys (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    device    TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    key       TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    fallback  INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (device, key)
+);
+
 -- Invite tokens. scope is 'server' (a way in to the server) or a channel ID.
 CREATE TABLE IF NOT EXISTS tokens (
     hash      BLOB PRIMARY KEY,

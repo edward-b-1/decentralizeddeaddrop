@@ -109,3 +109,62 @@ impl Record for Roster {
         self.v
     }
 }
+
+/// A device's messaging keys, signed by its signing key (the one its device ID is the
+/// hash of). The signing and agreement keys of `keys.rs` never leave the phone's secure
+/// hardware; these two are what the message encryption works with day to day, and this
+/// record is what ties them to the device.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessagingKeys {
+    pub v: u32,
+    pub device: String,
+    /// Curve25519 identity key, unpadded base64.
+    pub curve25519: String,
+    /// Ed25519 key that signs this device's prekeys, unpadded base64.
+    pub ed25519: String,
+    pub issued: i64,
+}
+
+impl Record for MessagingKeys {
+    const CONTEXT: &'static str = "deaddrop/messaging-keys/v1";
+    fn format_version(&self) -> u32 {
+        self.v
+    }
+}
+
+/// A prekey: a Curve25519 key a device leaves on the server so that others can start a
+/// private session with it while it is offline. Signed with the Ed25519 key in the
+/// device's [`MessagingKeys`], so a server cannot swap in a key of its own.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedKey {
+    /// Curve25519 public key, unpadded base64.
+    pub key: String,
+    /// Ed25519 signature over [`prekey_message`], unpadded base64.
+    pub signature: String,
+}
+
+/// What a device signs for each of its prekeys.
+pub fn prekey_message(device: &str, key: &str) -> Vec<u8> {
+    format!("deaddrop/prekey/v1\n{device}\n{key}").into_bytes()
+}
+
+/// Checks a device's signed messaging keys the way every phone must before trusting
+/// them: the signing key really is the one `device` is named after, the record is
+/// signed by it, and the record is about that device.
+///
+/// With `device` taken from an owner-signed roster, this is the chain that ties the
+/// keys messages are encrypted to back to the channel owner's signature.
+pub fn open_messaging_keys(
+    device: &str,
+    signing_key_der: &[u8],
+    signed: &Signed,
+) -> Result<MessagingKeys, RecordError> {
+    if keys::device_id(signing_key_der) != device {
+        return Err(RecordError::BadSignature);
+    }
+    let record: MessagingKeys = signed.open(signing_key_der)?;
+    if record.device != device {
+        return Err(RecordError::BadSignature);
+    }
+    Ok(record)
+}

@@ -113,6 +113,23 @@ caller appears to come from the proxy, and the limit becomes one shared limit.
 | GET | `/v1/channels/{channel}/members` | member | Signed roster, who has left since, every member's keys |
 | DELETE | `/v1/channels/{channel}/members/me` | member | Leave |
 
+### Messaging keys and prekeys
+
+| Method | Path | Who | Purpose |
+|---|---|---|---|
+| PUT | `/v1/keys` | device | Publish signed messaging `keys`; add `one_time` prekeys (up to 50 a time, 100 kept) and a `fallback` |
+| GET | `/v1/keys` | device | How many of my prekeys are left |
+| POST | `/v1/channels/{channel}/keys/claim` | member | `devices` → each one's signed messaging keys and one prekey |
+
+Messaging keys are a signed record (context `deaddrop/messaging-keys/v1`) signed by the
+device's own signing key. A prekey is `{"key", "signature"}`, signed with the Ed25519 key
+in that record over `deaddrop/prekey/v1\n<device>\n<key>`. A one-time prekey is handed
+out once and deleted; when none are left the fallback is handed out instead. `GET
+/v1/channels/{channel}/members` also returns each member's `messaging_keys`.
+
+The server checks that messaging keys are signed by the device publishing them. Phones
+do not rely on that and check the whole chain themselves.
+
 ### The queue
 
 | Method | Path | Who | Purpose |

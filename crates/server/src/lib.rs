@@ -7,6 +7,7 @@ pub mod error;
 pub mod logging;
 mod operator;
 mod password;
+mod prekeys;
 mod queue;
 pub mod state;
 pub mod store;
@@ -45,6 +46,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/channels/{channel}/members", get(channels::members))
         .route("/v1/channels/{channel}/members/me", delete(channels::leave))
         .route("/v1/channels/{channel}/messages", post(queue::send))
+        .route("/v1/keys", get(prekeys::status).put(prekeys::publish))
+        .route("/v1/channels/{channel}/keys/claim", post(prekeys::claim))
         .route("/v1/queue", get(queue::fetch))
         .route("/v1/queue/ack", post(queue::ack))
         .route("/v1/events", get(queue::events))

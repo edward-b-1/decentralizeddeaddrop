@@ -468,8 +468,9 @@ pub async fn members(State(state): State<AppState>, auth: Auth, Path(channel): P
                     Ok((row.get(0)?, row.get(1)?))
                 })?;
             let mut query = db.prepare(
-                "SELECT d.id, m.gone, d.signing_key, d.agreement_key, d.agreement_sig
+                "SELECT d.id, m.gone, d.signing_key, d.agreement_key, d.agreement_sig, k.record, k.signature
                  FROM members m JOIN devices d ON d.id = m.device
+                 LEFT JOIN messaging_keys k ON k.device = d.id
                  WHERE m.channel = ?1 ORDER BY d.id",
             )?;
             let mut gone = Vec::new();
@@ -480,11 +481,16 @@ pub async fn members(State(state): State<AppState>, auth: Auth, Path(channel): P
                 if row.get::<_, bool>(1)? {
                     gone.push(device.clone());
                 }
+                let messaging = match (row.get::<_, Option<String>>(5)?, row.get::<_, Option<String>>(6)?) {
+                    (Some(record), Some(signature)) => json!({ "record": record, "signature": signature }),
+                    _ => Value::Null,
+                };
                 keys.push(json!({
                     "device_id": device,
                     "signing_key": b64(&row.get::<_, Vec<u8>>(2)?),
                     "agreement_key": b64(&row.get::<_, Vec<u8>>(3)?),
                     "agreement_sig": b64(&row.get::<_, Vec<u8>>(4)?),
+                    "messaging_keys": messaging,
                 }));
             }
             Ok(Json(json!({
