@@ -22,3 +22,23 @@ Needs Rust 1.100 or later and a C compiler (for the bundled SQLite).
 cargo test --workspace
 cargo run -p deaddropd
 ```
+
+## Building for Android
+
+The app will use `crates/core`, `crates/crypto` and `crates/tls` as native code. That
+needs the Android NDK, Rust's Android targets and `cargo-ndk`:
+
+```
+sdkmanager --install "ndk;30.0.16248370"
+rustup target add aarch64-linux-android x86_64-linux-android
+cargo install cargo-ndk
+```
+
+Then, with `ANDROID_NDK_HOME` pointing at the NDK folder:
+
+```
+cargo ndk -t arm64-v8a -t x86_64 --platform 31 build -p deaddrop-core -p deaddrop-crypto -p deaddrop-tls
+```
+
+`arm64-v8a` is for phones and `x86_64` for the emulator. `cargo ndk ... test --no-run`
+builds the tests as Android programs, which can be pushed to a device with `adb` and run.
