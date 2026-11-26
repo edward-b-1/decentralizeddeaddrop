@@ -536,6 +536,13 @@ impl Account {
         Ok(())
     }
 
+    /// Takes this device off the server: its memberships, anything waiting for it, and
+    /// every channel it owns are deleted there. The account is of no use afterwards.
+    pub fn leave_server(&mut self, keys: &dyn DeviceKeys) -> Result<(), ClientError> {
+        self.request(keys, Method::DELETE, "/v1/devices/me", None)?;
+        Ok(())
+    }
+
     fn forget(&mut self, channel: &str) {
         self.channels.remove(channel);
         self.messenger.forget_channel(channel);
@@ -586,7 +593,7 @@ impl Account {
         {
             return Err(ClientError::Untrusted("the server offered an older version than one already seen"));
         }
-        let left: Vec<String> = view["left"]
+        let mut left: Vec<String> = view["left"]
             .as_array()
             .map(Vec::as_slice)
             .unwrap_or_default()
@@ -604,8 +611,14 @@ impl Account {
                 continue;
             }
             let entries = view["keys"].as_array().map(Vec::as_slice).unwrap_or_default();
-            let entry = entries.iter().find(|entry| entry["device_id"] == member.device.as_str());
-            let entry = entry.ok_or(ClientError::Untrusted("a member's keys are missing"))?;
+            let Some(entry) = entries.iter().find(|entry| entry["device_id"] == member.device.as_str()) else {
+                // Their device is gone from the server altogether (they took the server
+                // off their phone, or its operator removed them). That counts as having
+                // left. A server that hides a member this way gains nothing: it could
+                // simply not deliver to them.
+                left.push(member.device.clone());
+                continue;
+            };
             if entry["messaging_keys"].is_null() {
                 // Registered but not finished setting up: nothing can be sent to them yet.
                 continue;
@@ -653,6 +666,12 @@ impl Account {
             // A channel nobody invited this device to cannot be checked, so it is ignored.
             let Some(owner) = owner else { continue };
             changed |= self.refresh_channel(keys, channel, &owner)?;
+            // The owner's phone then signs a member list without anyone who has left.
+            let held = self.channels.get(channel).filter(|held| held.owner == self.device && !held.left.is_empty());
+            if let Some(members) = held.map(|held| held.members.clone()) {
+                self.publish_roster(keys, channel, members)?;
+                changed = true;
+            }
         }
         let gone: Vec<String> = self.channels.keys().filter(|id| !mine.contains(id)).cloned().collect();
         for channel in gone {

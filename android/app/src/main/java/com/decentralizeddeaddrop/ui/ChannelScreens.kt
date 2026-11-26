@@ -158,15 +158,10 @@ private fun Bubble(message: MessageUi) {
 @Composable
 fun ChannelDetailsScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, go: (Screen) -> Unit, home: () -> Unit) {
     val runner = rememberRunner()
-    var requests by remember { mutableIntStateOf(0) }
+    val requests = channel.asking
     var invite by remember { mutableStateOf<String?>(null) }
     var confirming by remember { mutableStateOf(false) }
 
-    if (channel.ownedByMe) {
-        LaunchedEffect(channel.key, channel.members.size) {
-            requests = runCatching { Servers.joinRequests(channel.slot, channel.id).size }.getOrDefault(0)
-        }
-    }
     invite?.let { link ->
         LinkDialog(
             title = "Invite to ${channel.name}",
@@ -266,7 +261,8 @@ fun JoinRequestsScreen(channel: ChannelUi, back: () -> Unit) {
     val runner = rememberRunner()
     var requests by remember { mutableStateOf<List<JoinRequestInfo>?>(null) }
     var reload by remember { mutableIntStateOf(0) }
-    LaunchedEffect(channel.key, reload) {
+    // Asked again whenever the server says the number of people asking has changed.
+    LaunchedEffect(channel.key, reload, channel.asking) {
         requests = runCatching { Servers.joinRequests(channel.slot, channel.id) }.getOrDefault(emptyList())
     }
     Page(title = "Join requests", subtitle = channel.name, onBack = back) {
@@ -415,5 +411,13 @@ fun JoinChannelScreen(initialLink: String, back: () -> Unit) {
         if (problem != null) Text(problem, Modifier.padding(top = 8.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
         OutlinedTextField(myName, { myName = it.take(32) }, Modifier.fillMaxWidth().padding(top = 10.dp), label = { Text("Your name in this channel") }, singleLine = true)
         Note("The app checks that the channel really belongs to the person the invite came from before it asks.")
+        if (info?.channel != null && slot == null && info.hasServerToken) {
+            // The invite also holds the way onto a server this phone is not on yet.
+            Heading("This invite also adds a server")
+            Item("Address", value = "${info.host} : ${info.port}")
+            Text("Fingerprint", Modifier.padding(top = 11.dp), fontSize = 15.sp)
+            Fingerprint(info.fingerprint)
+            Note("This phone is not on that server yet. Asking to join puts it on, with a new identity. The app connects only to the server with this fingerprint.")
+        }
     }
 }

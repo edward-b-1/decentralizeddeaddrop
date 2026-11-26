@@ -152,7 +152,11 @@ up). Every change of membership is a new roster. Phones never accept an older on
 - A device ID is a hash of the device's signing key, so the roster also pins every
   member's key. Names are unique within a channel, whatever the capitals.
 - When a member leaves, the server stops delivering to them at once and tells the others;
-  the owner's next roster drops them.
+  the owner's phone signs a roster without them the next time it is in touch.
+- A member whose device is deleted from the server (they took the server off their phone,
+  or the operator removed the device) counts as having left. Taking a server off a phone
+  deletes the device there, so nothing goes on waiting for a phone that will never
+  collect it; the channels that device owned go with it.
 
 ## 6. Message encryption
 
@@ -346,7 +350,8 @@ The **Android app** (`android/`, with the bridge in `crates/ffi`) is a first ver
 adding a server from a link, channels, conversations, invites, join requests, members,
 maximum message age, and the operator's controls. Each server gets its own identity in
 the Android Keystore; engine state and message history are stored encrypted with a
-Keystore key.
+Keystore key. All of these screens have been driven on an emulator against real servers,
+with the command-line client as the other people; nothing has run on a real phone yet.
 
 Not built yet:
 - In the app: receiving while it is closed, QR codes, typing a server's address by hand,

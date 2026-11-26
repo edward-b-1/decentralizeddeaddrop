@@ -34,6 +34,8 @@ data class ChannelUi(
     val lastLine: String,
     val lastTime: Long,
     val unread: Int,
+    /** For the owner: how many people are asking to join. */
+    val asking: Int,
 ) {
     val key: String get() = "$slot/$id"
 }
@@ -50,6 +52,8 @@ data class ServerUi(
     val channels: List<ChannelUi>,
     /** Channels asked to join, waiting for their owners. */
     val asked: List<String>,
+    /** For the person who runs the server: devices waiting to be approved. */
+    val waiting: List<String>,
 )
 
 data class MessageUi(
@@ -76,10 +80,26 @@ object Servers {
 
     private class History(var unread: Int = 0, val messages: MutableList<MessageUi> = mutableListOf())
 
-    private class Entry(val slot: Int, var label: String, val keys: DeviceKeys, val session: Session) {
+    private class Entry(val slot: Int, var label: String, val keys: DeviceKeys, val session: Session, val store: Store) {
         @Volatile var connection = Connection.Reconnecting
         @Volatile var stopped = false
         val history = ConcurrentHashMap<String, History>()
+
+        /** People asking to join each channel this phone owns. */
+        val asking = ConcurrentHashMap<String, Int>()
+
+        /** Devices waiting for approval, if this phone runs the server. */
+        @Volatile var waiting: List<String> = emptyList()
+    }
+
+    /** Writes the engine's state the moment the engine asks, before it goes on. */
+    private class Store(private val slot: Int) : StateStore {
+        /** Set when the server is taken off the phone, so nothing is written once its files are gone. */
+        @Volatile var closed = false
+
+        override fun save(state: ByteArray) {
+            if (!closed) vault.write(stateFile(slot), state)
+        }
     }
 
     private val entries = ConcurrentHashMap<Int, Entry>()
@@ -91,11 +111,6 @@ object Servers {
     private fun stateFile(slot: Int) = "server-$slot.state"
     private fun historyFile(slot: Int) = "server-$slot.history"
 
-    /** Writes the engine's state the moment the engine asks, before it goes on. */
-    private fun store(slot: Int) = object : StateStore {
-        override fun save(state: ByteArray) = vault.write(stateFile(slot), state)
-    }
-
     fun start(context: Context) {
         if (::vault.isInitialized) return
         vault = Vault(File(context.filesDir, "vault"))
@@ -106,8 +121,9 @@ object Servers {
                 val slot = saved.getInt("slot")
                 val state = vault.read(stateFile(slot)) ?: continue
                 val keys = DeviceKeys(slot)
-                val session = runCatching { Session.restore(state, keys, store(slot)) }.getOrNull() ?: continue
-                val entry = Entry(slot, saved.getString("label"), keys, session)
+                val store = Store(slot)
+                val session = runCatching { Session.restore(state, keys, store) }.getOrNull() ?: continue
+                val entry = Entry(slot, saved.getString("label"), keys, session, store)
                 loadHistory(entry)
                 entries[slot] = entry
                 listen(entry)
@@ -153,9 +169,11 @@ object Servers {
                         },
                         lastTime = last?.sent ?: 0,
                         unread = history?.unread ?: 0,
+                        asking = if (channel.ownedByMe) entry.asking[channel.id] ?: 0 else 0,
                     )
                 },
                 asked = session.asked(),
+                waiting = entry.waiting,
             )
         }
         servers.value = shown
@@ -249,12 +267,28 @@ object Servers {
         }
     }
 
+    /**
+     * What is waiting on the person holding this phone: people asking to join channels
+     * they own, and devices to approve if they run the server. The server says when
+     * either changes, so this follows every sync.
+     */
+    private fun lookAround(entry: Entry) {
+        val session = entry.session
+        val owned = session.channels().filter { it.ownedByMe }.map { it.id }
+        entry.asking.keys.retainAll(owned.toSet())
+        for (channel in owned) {
+            runCatching { session.joinRequests(channel).size }.onSuccess { entry.asking[channel] = it }
+        }
+        if (session.isOperator()) runCatching { session.waitingDevices() }.onSuccess { entry.waiting = it }
+    }
+
     /** Collects what is waiting, then waits for the server to say there is more. */
     private fun listen(entry: Entry) {
         thread(name = "server-${entry.slot}") {
             while (!entry.stopped) {
                 try {
                     take(entry, entry.session.sync())
+                    lookAround(entry)
                     entry.connection = Connection.Connected
                     publish()
                     while (!entry.stopped && !entry.session.waitForNews(25u)) {
@@ -292,14 +326,26 @@ object Servers {
         }
         val slot = (entries.keys.maxOrNull() ?: 0) + 1
         val keys = DeviceKeys(slot)
+        val store = Store(slot)
         val session = try {
-            Session.join(link, password?.takeIf { it.isNotEmpty() }, keys, store(slot))
+            Session.join(link, password?.takeIf { it.isNotEmpty() }, keys, store)
         } catch (failure: Exception) {
+            store.closed = true
             keys.destroy()
             vault.delete(stateFile(slot))
+            // The server says only that it did not let the phone in; say which way in that was.
+            if (failure is EngineException.Refused && failure.message == "not accepted") {
+                throw IllegalStateException(
+                    when {
+                        info.hasServerToken -> "The server did not accept that invite. It may have been used already or have run out."
+                        !password.isNullOrEmpty() -> "The server did not accept that password."
+                        else -> "The server did not let this phone in. It needs a password, or an invite link from the person who runs it."
+                    },
+                )
+            }
             throw failure
         }
-        val entry = Entry(slot, label.ifBlank { "${info.host}:${info.port}" }, keys, session)
+        val entry = Entry(slot, label.ifBlank { "${info.host}:${info.port}" }, keys, session, store)
         entries[slot] = entry
         saveRegistry()
         listen(entry)
@@ -315,11 +361,16 @@ object Servers {
 
     /**
      * Takes this server off the phone: its identity, its keys and its history are
-     * destroyed. (The server is not told; its operator can remove the device there.)
+     * destroyed. The server is told first, so that nothing goes on waiting there for a
+     * phone that will never collect it; if it cannot be reached, the phone forgets it
+     * all the same.
      */
     suspend fun forgetServer(slot: Int) = withContext(Dispatchers.IO) {
-        val entry = entries.remove(slot) ?: return@withContext
+        val entry = entries[slot] ?: return@withContext
+        runCatching { entry.session.leaveServer() }
+        entries.remove(slot)
         entry.stopped = true
+        entry.store.closed = true
         entry.keys.destroy()
         vault.delete(stateFile(slot))
         vault.delete(historyFile(slot))
@@ -334,9 +385,14 @@ object Servers {
 
     suspend fun inviteToChannel(slot: Int, channel: String): String = on(slot) { it.inviteToChannel(channel) }
 
-    suspend fun joinRequests(slot: Int, channel: String): List<JoinRequestInfo> = on(slot) { it.joinRequests(channel) }
+    suspend fun joinRequests(slot: Int, channel: String): List<JoinRequestInfo> = on(slot) { session ->
+        session.joinRequests(channel).also { entry(slot).asking[channel] = it.size }
+    }
 
-    suspend fun admit(slot: Int, channel: String, device: String) = on(slot) { it.admit(channel, device) }
+    suspend fun admit(slot: Int, channel: String, device: String) = on(slot) {
+        it.admit(channel, device)
+        entry(slot).asking[channel] = it.joinRequests(channel).size
+    }
 
     suspend fun removeMember(slot: Int, channel: String, device: String) = on(slot) { it.removeMember(channel, device) }
 
@@ -371,8 +427,10 @@ object Servers {
     suspend fun waysIn(slot: Int): WaysInInfo = on(slot) { it.waysIn() }
     suspend fun setWaysIn(slot: Int, open: Boolean, tokens: Boolean, approval: Boolean) = on(slot) { it.setWaysIn(open, tokens, approval) }
     suspend fun setServerPassword(slot: Int, password: String?) = on(slot) { it.setServerPassword(password) }
-    suspend fun waitingDevices(slot: Int): List<String> = on(slot) { it.waitingDevices() }
-    suspend fun approveDevice(slot: Int, device: String) = on(slot) { it.approveDevice(device) }
+    suspend fun approveDevice(slot: Int, device: String) = on(slot) {
+        it.approveDevice(device)
+        entry(slot).waiting = it.waitingDevices()
+    }
 
     private const val REGISTRY = "servers"
 }

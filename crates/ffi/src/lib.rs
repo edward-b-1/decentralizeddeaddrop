@@ -343,6 +343,12 @@ impl Session {
         self.change(|account, keys| account.delete_channel(keys, &channel))
     }
 
+    /// Takes this device off the server, with its memberships, anything waiting for it
+    /// and every channel it owns. The session is of no use afterwards.
+    pub fn leave_server(&self) -> Outcome<()> {
+        self.change(|account, keys| account.leave_server(keys))
+    }
+
     /// Sends a text message. False means it is sealed and stored but the server could
     /// not be reached; it goes with the next [`Session::sync`].
     pub fn send(&self, channel: String, text: String) -> Outcome<bool> {

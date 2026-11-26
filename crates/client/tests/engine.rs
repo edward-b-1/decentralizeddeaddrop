@@ -351,12 +351,66 @@ fn members_see_a_new_maximum_message_age_and_who_has_left() {
     assert_eq!(ben.account.channel(&id).unwrap().max_age, 600);
     assert_eq!(ben.account.set_max_age(&ben.keys, &id, 60), Err(ClientError::NotOwner));
 
-    // Cara leaves. The others hear of it and carry on without her.
+    // Cara leaves. Ben hears of it; Anna's phone, as the owner's, then signs a member
+    // list without her, and they carry on.
     cara.account.leave(&cara.keys, &id).unwrap();
     assert!(cara.account.channel(&id).is_none());
+    ben.sync();
+    assert_eq!(ben.account.channel(&id).unwrap().left, [cara.account.device()]);
     anna.sync();
-    assert_eq!(anna.account.channel(&id).unwrap().left, [cara.account.device()]);
+    let held = anna.account.channel(&id).unwrap();
+    assert!(held.left.is_empty());
+    assert!(held.members.iter().all(|member| member.device != cara.account.device()));
     assert_eq!(anna.send(&id, "still here"), Ok(true));
     assert_eq!(Person::texts(&ben.sync()), ["Anna: still here"]);
+    assert_eq!(ben.account.channel(&id).unwrap().members.len(), 2);
     assert!(Person::texts(&cara.sync()).is_empty());
+}
+
+#[test]
+fn taking_a_server_off_a_phone_leaves_nothing_waiting_for_it() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben"), (&mut cara, "Cara")]);
+    let bens = ben.account.create_channel(&ben.keys, "Ben's own", "Ben", 3600).unwrap();
+    admit(&mut ben, &bens, &mut cara, "Cara");
+    cara.sync();
+    assert!(cara.account.channel(&bens).is_some());
+
+    assert_eq!(anna.send(&id, "are you there?"), Ok(true));
+    cara.sync();
+    assert!(server.rows("messages") > 0, "Ben has not collected it");
+
+    ben.account.leave_server(&ben.keys).unwrap();
+    assert_eq!(server.rows("devices"), 2);
+    assert_eq!(server.rows("messages"), 0, "nothing waits for a phone that will never collect it");
+    assert!(ben.try_sync().is_err());
+
+    // The others carry on: Ben counts as having left, and the channel he owned is gone.
+    cara.sync();
+    assert!(cara.account.channel(&bens).is_none());
+    assert_eq!(cara.account.channel(&id).unwrap().left, [ben.account.device()]);
+    anna.sync();
+    assert_eq!(anna.account.channel(&id).unwrap().members.len(), 2);
+    assert_eq!(anna.send(&id, "just us now"), Ok(true));
+    assert_eq!(Person::texts(&cara.sync()), ["Anna: just us now"]);
+}
+
+#[test]
+fn a_device_the_operator_removes_counts_as_having_left() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let id = channel(&mut ben, "Ben", &mut [(&mut anna, "Anna"), (&mut cara, "Cara")]);
+
+    anna.account.remove_device(&anna.keys, cara.account.device()).unwrap();
+    anna.sync();
+    assert_eq!(anna.account.channel(&id).unwrap().left, [cara.account.device()]);
+    ben.sync();
+    assert_eq!(ben.account.channel(&id).unwrap().members.len(), 2);
+    assert_eq!(ben.send(&id, "two of us"), Ok(true));
+    assert_eq!(Person::texts(&anna.sync()), ["Ben: two of us"]);
 }

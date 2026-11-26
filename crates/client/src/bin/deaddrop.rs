@@ -22,6 +22,7 @@ USAGE:
     join LINK [--password PASSWORD]      Register on the server a link points to
     status                               This device, its server and its channels
     server-invite                        Make a link that lets a device onto the server (operator)
+    server-password [PASSWORD]           Set the server password, or remove it (operator)
     new-channel NAME --as MY-NAME [--max-age SECONDS]
     invite CHANNEL                       Make a link that lets someone ask to join
     ask LINK --as MY-NAME                Ask to join the channel a link invites to
@@ -29,6 +30,7 @@ USAGE:
     admit CHANNEL DEVICE                 Let a device in (owner)
     remove CHANNEL DEVICE                Remove a member (owner)
     leave CHANNEL
+    leave-server                         Delete this device from the server, with the channels it owns
     send CHANNEL TEXT...
     receive                              Collect and print what is waiting
     listen                               Stay connected and print messages as they arrive
@@ -192,6 +194,14 @@ fn run() -> Result<(), String> {
     match command.as_str() {
         "status" => status(&state.account),
         "server-invite" => println!("{}", state.account.invite_to_server(&keys, 1, 86_400).map_err(fail)?),
+        "server-password" => {
+            let password = words.next();
+            state.account.set_server_password(&keys, password.as_deref()).map_err(fail)?;
+            println!(
+                "{}",
+                if password.is_some() { "The server password is set." } else { "The server has no password now." }
+            );
+        }
         "new-channel" => {
             let name = next("a name")?;
             let max_age = match max_age {
@@ -227,6 +237,10 @@ fn run() -> Result<(), String> {
         "leave" => {
             let channel = state.channel(&next("a channel")?)?;
             state.account.leave(&keys, &channel).map_err(fail)?;
+        }
+        "leave-server" => {
+            state.account.leave_server(&keys).map_err(fail)?;
+            println!("This device is deleted from the server. The state file is of no further use.");
         }
         "send" => {
             let channel = state.channel(&next("a channel")?)?;

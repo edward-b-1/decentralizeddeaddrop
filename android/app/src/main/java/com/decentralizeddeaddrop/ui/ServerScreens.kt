@@ -91,7 +91,6 @@ fun AddServerScreen(initialLink: String, back: () -> Unit) {
 fun ServerScreen(server: ServerUi, back: () -> Unit) {
     val runner = rememberRunner()
     var ways by remember { mutableStateOf<WaysInInfo?>(null) }
-    var waiting by remember { mutableStateOf<List<String>>(emptyList()) }
     var reload by remember { mutableIntStateOf(0) }
     var invite by remember { mutableStateOf<String?>(null) }
     var settingPassword by remember { mutableStateOf(false) }
@@ -100,7 +99,6 @@ fun ServerScreen(server: ServerUi, back: () -> Unit) {
     if (server.operator && server.connection == Connection.Connected) {
         LaunchedEffect(server.slot, reload) {
             ways = runCatching { Servers.waysIn(server.slot) }.getOrNull()
-            waiting = runCatching { Servers.waitingDevices(server.slot) }.getOrDefault(emptyList())
         }
     }
     invite?.let { link ->
@@ -124,7 +122,9 @@ fun ServerScreen(server: ServerUi, back: () -> Unit) {
     if (forgetting) {
         Confirm(
             "Remove ${server.label} from this phone?",
-            "Your identity on it, your keys for it and your message history from it are destroyed. You would need a new invite to come back, and would be a new device to everyone there.",
+            "Your identity on it, your keys for it and your message history from it are destroyed, and the server is told to forget this phone. " +
+                "Channels you own there are deleted for everyone. You would need a new invite to come back, and would be a new device to everyone there." +
+                if (server.operator) " Nobody will run this server until a new operator token is made on the machine it runs on." else "",
             "Remove",
             onNo = { forgetting = false },
             onYes = {
@@ -150,10 +150,10 @@ fun ServerScreen(server: ServerUi, back: () -> Unit) {
         Note("This is how phones recognise the server. Read it out to someone to let them check they have the right one.")
 
         if (server.operator) {
-            waiting.forEach { device ->
+            server.waiting.forEach { device ->
                 Item("Waiting for approval", detail = "Device $device", highlight = true, end = {
                     Primary("Approve", enabled = !runner.busy) {
-                        runner.run(then = { reload += 1 }) { Servers.approveDevice(server.slot, device) }
+                        runner.run { Servers.approveDevice(server.slot, device) }
                     }
                 })
             }

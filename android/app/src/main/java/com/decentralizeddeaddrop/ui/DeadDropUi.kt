@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,8 @@ sealed interface Screen {
 @Composable
 fun DeadDropUi(openedLink: String?, onLinkHandled: () -> Unit) {
     val servers by Servers.servers.collectAsStateWithLifecycle()
+    // Kept here so that coming back from another screen returns to the same tab.
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
     val back: () -> Unit = { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
     val go: (Screen) -> Unit = { stack.add(it) }
@@ -77,7 +80,7 @@ fun DeadDropUi(openedLink: String?, onLinkHandled: () -> Unit) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize().safeDrawingPadding()) {
             when (val screen = stack.last()) {
-                Screen.Home -> Home(servers, go)
+                Screen.Home -> Home(servers, tab, { tab = it }, go)
                 is Screen.Conversation -> channel(screen.key).orBack(back) { ConversationScreen(it, server(it.slot), back, go) }
                 is Screen.ChannelDetails -> channel(screen.key).orBack(back) { ChannelDetailsScreen(it, server(it.slot), back, go) { stack.removeRange(1, stack.size) } }
                 is Screen.Members -> channel(screen.key).orBack(back) { MembersScreen(it, back) }
@@ -102,14 +105,13 @@ private fun <T> T?.orBack(back: () -> Unit, content: @Composable (T) -> Unit) {
 }
 
 @Composable
-private fun Home(servers: List<ServerUi>, go: (Screen) -> Unit) {
-    var tab by remember { mutableIntStateOf(0) }
+private fun Home(servers: List<ServerUi>, tab: Int, onTab: (Int) -> Unit, go: (Screen) -> Unit) {
     Column(Modifier.fillMaxSize()) {
         // Tabs at the top, as in Pocket Radio.
         Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(top = 6.dp)) {
             listOf("Channels", "Servers", "Settings").forEachIndexed { index, name ->
                 val selected = tab == index
-                Column(Modifier.weight(1f).clickable { tab = index }, horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.weight(1f).clickable { onTab(index) }, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         name,
                         Modifier.padding(vertical = 10.dp),
@@ -172,6 +174,13 @@ private fun ChannelsTab(servers: List<ServerUi>, go: (Screen) -> Unit) {
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            if (channel.asking > 0) {
+                                Text(
+                                    if (channel.asking == 1) "Someone is asking to join" else "${channel.asking} people are asking to join",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                            }
                         }
                         Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(shortTime(channel.lastTime), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -209,7 +218,16 @@ private fun ServersTab(servers: List<ServerUi>, go: (Screen) -> Unit) {
                 Item(
                     title = server.label,
                     detail = when (server.connection) {
-                        Connection.Connected -> server.address + if (server.operator) " · you run this server" else ""
+                        // A server with no name of its own is already titled with its address.
+                        Connection.Connected -> listOfNotNull(
+                            server.address.takeIf { it != server.label },
+                            "you run this server".takeIf { server.operator },
+                            when (server.waiting.size) {
+                                0 -> null
+                                1 -> "1 device waiting for approval"
+                                else -> "${server.waiting.size} devices waiting for approval"
+                            },
+                        ).joinToString(" · ").replaceFirstChar { it.uppercase() }.ifEmpty { "Connected" }
                         Connection.Reconnecting -> "Reconnecting…"
                         Connection.AwaitingApproval -> "Waiting for the person who runs it to approve this phone"
                     },
