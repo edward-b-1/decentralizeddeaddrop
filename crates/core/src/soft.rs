@@ -38,6 +38,21 @@ impl SoftDevice {
         SoftDevice { signing: new_key(), agreement: new_key() }
     }
 
+    /// Both private keys, for a command-line client to keep in its state file.
+    /// A phone never does this: its keys cannot leave the secure hardware.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        [self.signing.to_bytes(), self.agreement.to_bytes()].concat()
+    }
+
+    /// Restores a device from [`SoftDevice::to_bytes`].
+    pub fn from_bytes(bytes: &[u8]) -> Option<SoftDevice> {
+        let (signing, agreement) = bytes.split_at_checked(32)?;
+        Some(SoftDevice {
+            signing: SigningKey::from_slice(signing).ok()?,
+            agreement: SigningKey::from_slice(agreement).ok()?,
+        })
+    }
+
     pub fn signing_key_der(&self) -> Vec<u8> {
         public_der(&self.signing)
     }
@@ -81,6 +96,16 @@ mod tests {
         assert!(!keys::verify(&b.signing_key_der(), b"hello", &signature));
         assert!(!keys::verify(b"not a key", b"hello", &signature));
         assert!(!keys::verify(&a.signing_key_der(), b"hello", b"not a signature"));
+    }
+
+    #[test]
+    fn a_saved_device_is_the_same_device() {
+        let device = SoftDevice::new();
+        let restored = SoftDevice::from_bytes(&device.to_bytes()).unwrap();
+        assert_eq!(restored.device_id(), device.device_id());
+        assert_eq!(restored.agreement_key_der(), device.agreement_key_der());
+        assert!(keys::verify(&device.signing_key_der(), b"hello", &restored.sign(b"hello")));
+        assert!(SoftDevice::from_bytes(b"too short").is_none());
     }
 
     #[test]

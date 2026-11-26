@@ -337,3 +337,15 @@ fn junk_is_refused() {
         assert!(all[1].decrypt(CHANNEL, "anna", junk).is_err(), "{junk:?}");
     }
 }
+
+#[test]
+fn sending_can_be_restarted_after_a_hand_over_was_lost() {
+    let mut all = group(&["anna", "ben"]);
+    let lost = send(&mut all, 0, "hello");
+    assert_eq!(lost.shares.len(), 1);
+    // The hand-over never reached ben, so anna starts again.
+    all[0].restart_sending(CHANNEL);
+    let again = say(&mut all, 0, "hello again");
+    assert_eq!(again.shares.len(), 1, "a new ratchet, handed over afresh");
+    assert_eq!(open(&mut all, 0, 1, &lost.message), Err(Error::UnknownSession));
+}

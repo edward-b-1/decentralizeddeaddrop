@@ -57,11 +57,20 @@ instead (`--tls-cert`, `--tls-key`); the fingerprint works the same way.
 - If only the certificate file is lost, the server remakes it from the key and nothing
   changes for anyone.
 
-Invite link (also the QR content), handled by the app itself, never by a website:
+Links (also the QR content) are handled by the app itself, never by a website:
 
 ```
-deaddrop://HOST:PORT/#fp=<fingerprint>&t=<token if any>
+deaddrop://HOST:PORT/#fp=<fingerprint>[&t=<server token>][&c=<channel>&o=<owner>&ct=<channel token>]
 ```
+
+- `fp`: the server's fingerprint.
+- `t`: a token that lets a new device onto the server (made by the operator).
+- `c`, `o`, `ct`: an invite to a channel (made by its owner): the channel's ID, the
+  owner's device ID, and a token that lets the holder ask to join. The owner's ID is
+  what lets the joiner check that the channel the server shows is the one they were
+  invited to (§3.1).
+
+Nothing after the `#` is ever sent in a request.
 
 ## 3. Ways in (server authentication)
 
@@ -325,8 +334,23 @@ delivery over a WebSocket, TLS 1.3 with the server fingerprint (§2, `crates/tls
 logging that holds no identifiers except for wrong server passwords. End-to-end tests run whole clients through the server, including a server
 that swaps keys and a removed member handed every sealed message.
 
+The **client engine** (`crates/client`) does everything an app does apart from drawing
+screens and holding the hardware keys: joining a server from a link, signing in, channels,
+invites, sending, receiving, and saving its state. It checks every claim a server makes.
+Sealed messages are stored before they are posted and state is stored before anything is
+acknowledged, so a crash loses nothing and never reuses a key; a message written with no
+signal goes when the server is next reached. A command-line client, `deaddrop`, is built
+on it.
+
+The **Android app** (`android/`, with the bridge in `crates/ffi`) is a first version:
+adding a server from a link, channels, conversations, invites, join requests, members,
+maximum message age, and the operator's controls. Each server gets its own identity in
+the Android Keystore; engine state and message history are stored encrypted with a
+Keystore key.
+
 Not built yet:
-- **The Android app**, and the bridge that lets it use `crates/core` and `crates/crypto`.
+- In the app: receiving while it is closed, QR codes, typing a server's address by hand,
+  safety numbers (`android/README.md` has the list).
 - **Asking again for a lost hand-over** (§6), and recovering a private session that has
   gone out of step.
-- The **safety numbers** of §4 and everything in §9 to §11.
+- Everything in §9 to §11.

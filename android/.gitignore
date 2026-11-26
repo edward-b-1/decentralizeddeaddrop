@@ -1,0 +1,11 @@
+.gradle/
+.kotlin/
+build/
+/app/build/
+local.properties
+.idea/
+*.iml
+
+# Made by build-engine.sh from the Rust crates.
+/app/src/main/jniLibs/
+/app/src/main/java/com/decentralizeddeaddrop/engine/

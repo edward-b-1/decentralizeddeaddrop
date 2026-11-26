@@ -1,0 +1,23 @@
+[package]
+name = "deaddrop-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "deaddrop"
+path = "src/bin/deaddrop.rs"
+
+[dependencies]
+deaddrop-core = { version = "0.1.0", path = "../core" }
+deaddrop-crypto = { version = "0.1.0", path = "../crypto" }
+deaddrop-tls = { version = "0.1.0", path = "../tls" }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+deaddropd = { version = "0.1.0", path = "../server" }
+tokio = { version = "1.54.1", features = ["rt-multi-thread"] }

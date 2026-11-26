@@ -245,6 +245,15 @@ impl Messenger {
         self.channels.remove(channel);
     }
 
+    /// Throws away this device's sending ratchet for a channel, so that the next message
+    /// starts a new one and hands it to every member again. For when a hand-over could
+    /// not be sent: the members it was meant for would otherwise never get it.
+    pub fn restart_sending(&mut self, channel: &str) {
+        if let Some(state) = self.channels.get_mut(channel) {
+            state.outbound = None;
+        }
+    }
+
     /// The other members of a channel this device cannot yet send keys to, because it
     /// has no private session with them.
     pub fn missing_sessions(&self, channel: &str) -> Result<Vec<String>, Error> {

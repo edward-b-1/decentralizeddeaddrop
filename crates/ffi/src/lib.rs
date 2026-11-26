@@ -1,0 +1,406 @@
+//! The bridge between the Android app (Kotlin) and the client engine (Rust).
+//!
+//! This crate adds no behaviour. It restates `deaddrop_client::Account` in the shapes
+//! UniFFI can carry across to Kotlin, and takes two things back from Kotlin: the
+//! device's hardware keys ([`KeyHolder`]) and somewhere safe to keep state
+//! ([`StateStore`]).
+//!
+//! Every call blocks while it talks to the server: call from a background thread.
+
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
+
+use deaddrop_client::{Account, ClientError, DeviceKeys, Event, Link, Live, Wake, WayIn, WaysIn};
+
+uniffi::setup_scaffolding!();
+
+/// The device's two long-term keys, held in the Android Keystore. The private halves
+/// never cross this bridge: the engine only ever asks for signatures.
+#[uniffi::export(with_foreign)]
+pub trait KeyHolder: Send + Sync {
+    /// The signing public key, DER SubjectPublicKeyInfo (P-256).
+    fn signing_key_der(&self) -> Vec<u8>;
+    /// The agreement public key, DER SubjectPublicKeyInfo (P-256).
+    fn agreement_key_der(&self) -> Vec<u8>;
+    /// The signing key's signature over the agreement key message, base64.
+    fn agreement_signature(&self) -> String;
+    /// A DER ECDSA signature over SHA-256(`message`), made with the signing key.
+    fn sign(&self, message: Vec<u8>) -> Vec<u8>;
+}
+
+/// Where the engine's state is kept. `save` is called at the moments the state must
+/// be stored before the engine goes on, so it must not return until the bytes are
+/// safely written. They are secret key material: encrypt them with a Keystore key.
+#[uniffi::export(with_foreign)]
+pub trait StateStore: Send + Sync {
+    fn save(&self, state: Vec<u8>);
+}
+
+struct Keys(Arc<dyn KeyHolder>);
+
+impl DeviceKeys for Keys {
+    fn signing_key_der(&self) -> Vec<u8> {
+        self.0.signing_key_der()
+    }
+    fn agreement_key_der(&self) -> Vec<u8> {
+        self.0.agreement_key_der()
+    }
+    fn agreement_signature(&self) -> String {
+        self.0.agreement_signature()
+    }
+    fn sign(&self, message: &[u8]) -> Vec<u8> {
+        self.0.sign(message.to_vec())
+    }
+}
+
+// Carried to Kotlin as an exception per variant, each with one message.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum EngineError {
+    /// Not a complete `deaddrop://` link.
+    #[error("{message}")]
+    BadLink { message: String },
+    /// The server cannot be reached, or what answered is not the server with the
+    /// expected fingerprint.
+    #[error("{message}")]
+    Unreachable { message: String },
+    /// The server said no.
+    #[error("{message}")]
+    Refused { status: u16, message: String },
+    /// The operator has not approved this device yet.
+    #[error("{message}")]
+    AwaitingApproval { message: String },
+    /// The server presented something that fails a check.
+    #[error("{message}")]
+    Untrusted { message: String },
+    #[error("{message}")]
+    Other { message: String },
+}
+
+impl From<ClientError> for EngineError {
+    fn from(error: ClientError) -> EngineError {
+        let message = error.to_string();
+        match error {
+            ClientError::BadLink => EngineError::BadLink { message },
+            ClientError::Unreachable => EngineError::Unreachable { message },
+            ClientError::Refused { status, message } => EngineError::Refused { status, message },
+            ClientError::AwaitingApproval => EngineError::AwaitingApproval { message },
+            ClientError::Untrusted(_) => EngineError::Untrusted { message },
+            _ => EngineError::Other { message },
+        }
+    }
+}
+
+type Outcome<T> = Result<T, EngineError>;
+
+/// What a `deaddrop://` link holds, for the app to show before acting on it.
+#[derive(uniffi::Record)]
+pub struct LinkInfo {
+    pub host: String,
+    pub port: u16,
+    /// The fingerprint in groups of four, for people to read.
+    pub fingerprint: String,
+    /// Whether the link lets a new device onto the server.
+    pub has_server_token: bool,
+    /// The channel the link invites to, if it is a channel invite.
+    pub channel: Option<String>,
+}
+
+/// Reads a link without contacting anything. `None` if it is not a complete link.
+#[uniffi::export]
+pub fn read_link(text: String) -> Option<LinkInfo> {
+    let link = Link::parse(&text)?;
+    Some(LinkInfo {
+        host: link.server.host,
+        port: link.server.port,
+        fingerprint: deaddrop_tls::display(&link.server.fingerprint),
+        has_server_token: link.server_token.is_some(),
+        channel: link.channel.map(|invite| invite.channel),
+    })
+}
+
+/// Builds a link from an address typed by hand and a fingerprint the person has
+/// compared. `None` if the fingerprint is not a fingerprint.
+#[uniffi::export]
+pub fn link_from_parts(host: String, port: u16, fingerprint: String, token: Option<String>) -> Option<String> {
+    let fingerprint = deaddrop_tls::parse(&fingerprint)?;
+    let token = token.map(|token| format!("&t={token}")).unwrap_or_default();
+    let text = format!("deaddrop://{host}:{port}/#fp={fingerprint}{token}");
+    Link::parse(&text).map(|link| link.to_string())
+}
+
+#[derive(uniffi::Record)]
+pub struct Member {
+    pub device: String,
+    pub name: String,
+    /// Has left since the owner last signed the member list.
+    pub has_left: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct ChannelInfo {
+    pub id: String,
+    pub name: String,
+    pub owner: String,
+    pub owned_by_me: bool,
+    /// Maximum message age, in seconds.
+    pub max_age: u64,
+    pub members: Vec<Member>,
+}
+
+#[derive(uniffi::Record)]
+pub struct JoinRequestInfo {
+    pub device: String,
+    pub name: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct WaysInInfo {
+    pub open: bool,
+    pub tokens: bool,
+    pub approval: bool,
+    pub password_set: bool,
+}
+
+#[derive(uniffi::Enum)]
+pub enum News {
+    Message {
+        channel: String,
+        sender: String,
+        sender_name: Option<String>,
+        text: String,
+        sent: i64,
+    },
+    /// A message arrived that cannot be opened.
+    Unreadable {
+        channel: String,
+        sender: String,
+    },
+    /// The channel list, or something about a channel, changed.
+    ChannelsChanged,
+}
+
+impl From<Event> for News {
+    fn from(event: Event) -> News {
+        match event {
+            Event::Message { channel, sender, sender_name, text, sent } => {
+                News::Message { channel, sender, sender_name, text, sent }
+            }
+            Event::Unreadable { channel, sender } => News::Unreadable { channel, sender },
+            Event::ChannelsChanged => News::ChannelsChanged,
+        }
+    }
+}
+
+/// One identity on one server.
+#[derive(uniffi::Object)]
+pub struct Session {
+    account: Mutex<Account>,
+    live: Mutex<Option<Live>>,
+    keys: Keys,
+    store: Arc<dyn StateStore>,
+}
+
+impl Session {
+    fn new(account: Account, keys: Arc<dyn KeyHolder>, store: Arc<dyn StateStore>) -> Arc<Session> {
+        Arc::new(Session { account: Mutex::new(account), live: Mutex::new(None), keys: Keys(keys), store })
+    }
+
+    fn account(&self) -> MutexGuard<'_, Account> {
+        self.account.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Runs something that changes the account, then stores the result.
+    fn change<T>(&self, work: impl FnOnce(&mut Account, &Keys) -> Result<T, ClientError>) -> Outcome<T> {
+        let mut account = self.account();
+        let result = work(&mut account, &self.keys);
+        // Stored even after a failure: the attempt may have moved keys on.
+        self.store.save(account.to_bytes());
+        Ok(result?)
+    }
+}
+
+#[uniffi::export]
+impl Session {
+    /// Registers this device on the server a link points to.
+    #[uniffi::constructor]
+    pub fn join(
+        link: String,
+        password: Option<String>,
+        keys: Arc<dyn KeyHolder>,
+        store: Arc<dyn StateStore>,
+    ) -> Outcome<Arc<Session>> {
+        let link = Link::parse(&link).ok_or(ClientError::BadLink)?;
+        let way_in = WayIn { token: link.server_token.clone(), password };
+        let account = Account::join(&link.server, &way_in, &Keys(keys.clone()))?;
+        store.save(account.to_bytes());
+        Ok(Session::new(account, keys, store))
+    }
+
+    /// Restores a session from state the [`StateStore`] was given earlier.
+    #[uniffi::constructor]
+    pub fn restore(state: Vec<u8>, keys: Arc<dyn KeyHolder>, store: Arc<dyn StateStore>) -> Outcome<Arc<Session>> {
+        Ok(Session::new(Account::from_bytes(&state)?, keys, store))
+    }
+
+    pub fn device(&self) -> String {
+        self.account().device().to_owned()
+    }
+
+    /// The server's address, as `host:port`.
+    pub fn address(&self) -> String {
+        self.account().address().authority()
+    }
+
+    /// The server's fingerprint in groups of four.
+    pub fn fingerprint(&self) -> String {
+        deaddrop_tls::display(&self.account().address().fingerprint)
+    }
+
+    pub fn is_operator(&self) -> bool {
+        self.account().operator()
+    }
+
+    /// False while the device is waiting for the operator's approval.
+    pub fn is_approved(&self) -> bool {
+        self.account().approved()
+    }
+
+    pub fn channels(&self) -> Vec<ChannelInfo> {
+        let account = self.account();
+        account
+            .channels()
+            .map(|channel| ChannelInfo {
+                id: channel.id.clone(),
+                name: channel.name.clone(),
+                owner: channel.owner.clone(),
+                owned_by_me: channel.owner == account.device(),
+                max_age: channel.max_age,
+                members: channel
+                    .members
+                    .iter()
+                    .map(|member| Member {
+                        device: member.device.clone(),
+                        name: member.name.clone(),
+                        has_left: channel.left.contains(&member.device),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Channels this device has asked to join and is waiting to be let into.
+    pub fn asked(&self) -> Vec<String> {
+        self.account().asked().map(str::to_owned).collect()
+    }
+
+    /// Sealed messages waiting for the server to be reachable.
+    pub fn unsent(&self) -> u32 {
+        self.account().unsent() as u32
+    }
+
+    pub fn create_channel(&self, name: String, my_name: String, max_age: u64) -> Outcome<String> {
+        self.change(|account, keys| account.create_channel(keys, &name, &my_name, max_age))
+    }
+
+    /// A link that lets one person ask to join, good for a day.
+    pub fn invite_to_channel(&self, channel: String) -> Outcome<String> {
+        self.change(|account, keys| account.invite_to_channel(keys, &channel, 1, 86_400)).map(|link| link.to_string())
+    }
+
+    /// A link that lets one new device onto the server, good for a day. Operator only.
+    pub fn invite_to_server(&self) -> Outcome<String> {
+        self.change(|account, keys| account.invite_to_server(keys, 1, 86_400)).map(|link| link.to_string())
+    }
+
+    pub fn ask_to_join(&self, link: String, my_name: String) -> Outcome<()> {
+        let link = Link::parse(&link).ok_or(ClientError::BadLink)?;
+        self.change(|account, keys| account.ask_to_join(keys, &link, &my_name))
+    }
+
+    pub fn join_requests(&self, channel: String) -> Outcome<Vec<JoinRequestInfo>> {
+        let requests = self.change(|account, keys| account.join_requests(keys, &channel))?;
+        Ok(requests.into_iter().map(|request| JoinRequestInfo { device: request.device, name: request.name }).collect())
+    }
+
+    pub fn admit(&self, channel: String, device: String) -> Outcome<()> {
+        self.change(|account, keys| account.admit(keys, &channel, &device))
+    }
+
+    pub fn remove_member(&self, channel: String, device: String) -> Outcome<()> {
+        self.change(|account, keys| account.remove(keys, &channel, &device))
+    }
+
+    pub fn set_max_age(&self, channel: String, max_age: u64) -> Outcome<()> {
+        self.change(|account, keys| account.set_max_age(keys, &channel, max_age))
+    }
+
+    pub fn leave(&self, channel: String) -> Outcome<()> {
+        self.change(|account, keys| account.leave(keys, &channel))
+    }
+
+    pub fn delete_channel(&self, channel: String) -> Outcome<()> {
+        self.change(|account, keys| account.delete_channel(keys, &channel))
+    }
+
+    /// Sends a text message. False means it is sealed and stored but the server could
+    /// not be reached; it goes with the next [`Session::sync`].
+    pub fn send(&self, channel: String, text: String) -> Outcome<bool> {
+        let mut account = self.account();
+        let store = &self.store;
+        let sent = account.send(&self.keys, &channel, &text, &mut |bytes| store.save(bytes.to_vec()));
+        store.save(account.to_bytes());
+        Ok(sent?)
+    }
+
+    /// Does everything due and returns what is new.
+    pub fn sync(&self) -> Outcome<Vec<News>> {
+        let mut account = self.account();
+        let store = &self.store;
+        let events = account.sync(&self.keys, &mut |bytes| store.save(bytes.to_vec()));
+        store.save(account.to_bytes());
+        Ok(events?.into_iter().map(News::from).collect())
+    }
+
+    /// Waits up to `seconds` for the server to say there is something to collect.
+    /// True means call [`Session::sync`] now. An error means the connection could not
+    /// be made or has dropped: wait a little and call again.
+    pub fn wait_for_news(&self, seconds: u32) -> Outcome<bool> {
+        let mut live = self.live.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if live.is_none() {
+            *live = Some(self.account().open_live(&self.keys)?);
+        }
+        match live.as_mut().expect("just opened").wait(Duration::from_secs(u64::from(seconds))) {
+            Ok(wake) => Ok(wake == Wake::Sync),
+            Err(error) => {
+                *live = None;
+                Err(error.into())
+            }
+        }
+    }
+
+    // ---- for the device that runs the server
+
+    pub fn ways_in(&self) -> Outcome<WaysInInfo> {
+        let ways = self.change(|account, keys| account.ways_in(keys))?;
+        Ok(WaysInInfo { open: ways.open, tokens: ways.tokens, approval: ways.approval, password_set: ways.password })
+    }
+
+    pub fn set_ways_in(&self, open: bool, tokens: bool, approval: bool) -> Outcome<()> {
+        let ways = WaysIn { open, tokens, approval, password: false };
+        self.change(|account, keys| account.set_ways_in(keys, &ways))
+    }
+
+    /// Sets the server password, or removes it with null.
+    pub fn set_server_password(&self, password: Option<String>) -> Outcome<()> {
+        self.change(|account, keys| account.set_server_password(keys, password.as_deref()))
+    }
+
+    pub fn waiting_devices(&self) -> Outcome<Vec<String>> {
+        self.change(|account, keys| account.waiting_devices(keys))
+    }
+
+    pub fn approve_device(&self, device: String) -> Outcome<()> {
+        self.change(|account, keys| account.approve_device(keys, &device))
+    }
+}
