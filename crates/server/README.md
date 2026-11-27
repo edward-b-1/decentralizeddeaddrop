@@ -83,8 +83,7 @@ firewall tool can ban whoever is guessing:
 Nothing else is ever logged with an address. Someone who knows the password does not
 appear, nor does anyone using an invite or any other way in.
 
-Example fail2ban files are in `deploy/fail2ban/` (not yet tried against a running
-fail2ban). `docs/DEPLOYMENT.md` covers running the server on a machine of your own.
+Example fail2ban files are in `deploy/fail2ban/`. `docs/DEPLOYMENT.md` covers running the server on a machine of your own.
 
 ## API (version 1)
 

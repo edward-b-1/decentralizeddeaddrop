@@ -76,7 +76,9 @@ sudo journalctl -u deaddropd                  # the first start prints the link 
 ```
 
 The unit file runs the server as its own user with access to nothing but
-`/var/lib/deaddrop`.
+`/var/lib/deaddrop`. Open the port as well (`sudo ufw allow 7443/tcp`). Commands that
+read the data folder need root here, for example
+`sudo deaddropd fingerprint --db /var/lib/deaddrop/deaddrop.db`.
 
 ## What to back up, and what happens if you lose it
 
@@ -121,8 +123,9 @@ so that a firewall tool can act on it:
 ```
 
 The server already refuses an address after ten wrong passwords in ten minutes.
-`deploy/fail2ban/` has example files for blocking such an address at the firewall as
-well; they have not yet been tried against a running fail2ban.
+`deploy/fail2ban/` has files for blocking such an address at the firewall as well.
+fail2ban reads the lines and matches them; an address on fail2ban's own ignore list
+(often the administrator's) is, as always, never banned.
 
 If you put the server behind Docker Desktop, a load balancer or anything else that hides
 callers' addresses, every caller looks the same to the password limit. On an ordinary

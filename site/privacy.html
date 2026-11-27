@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacy policy · Decentralized Dead Drop</title>
+<meta name="description" content="The Decentralized Dead Drop privacy policy: we receive nothing.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3.5" y="14" width="25" height="14.5" rx="3" fill="none" stroke="currentColor" stroke-width="2.6"/><rect x="11" y="3" width="10" height="15" rx="1.6" fill="currentColor"/></svg>
+      Decentralized Dead Drop
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a href="how-it-works.html">How it works</a>
+      <a href="server.html">Run a server</a>
+      <a aria-current="page" href="privacy.html">Privacy</a>
+      <a class="btn" href="download.html">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="pagehead">
+    <div class="wrap">
+      <p class="eyebrow">Privacy policy</p>
+      <h1>We receive nothing.</h1>
+      <p class="lede">The app has no account with us, no connection to any server of ours, no analytics, no adverts and no crash reporting. It talks only to the servers you add to it, which are run by you or by people you know.</p>
+      <p class="small">Decentralized Dead Drop is made by an individual developer. Last updated 27 November 2026.</p>
+    </div>
+  </section>
+
+  <section class="band first">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>What the app keeps on your phone</h2>
+        <ul>
+          <li>Your identity keys, in the phone's secure hardware. They never leave it.</li>
+          <li>For each server you add: its address and fingerprint, your channels, their members' names, your message history, and the everyday keys that seal and open messages. These are stored encrypted with a key held in the phone's secure hardware, and are left out of phone backups.</li>
+          <li>Two settings: whether to stay connected in the background, and whether notifications show message text.</li>
+        </ul>
+        <p>Removing a server in the app destroys your keys and history for it. Uninstalling the app destroys all of it.</p>
+        <h2 class="mt">The camera and notifications</h2>
+        <p>The camera is used only to scan QR codes, when you ask it to. Pictures are read on the phone and are neither kept nor sent anywhere. Notifications are made on the phone itself: the app uses no push service.</p>
+        <h2 class="mt">This website</h2>
+        <p>It sets no cookies, runs no analytics and loads nothing from anyone else. Its server keeps no log of visitors or downloads.</p>
+      </div>
+      <div class="prose">
+        <h2>What goes to a server you add</h2>
+        <p>A server is run by whoever gave you its address, and they are responsible for it. By design it receives as little as possible.</p>
+        <ul>
+          <li><b>It can see</b> a device ID that the app makes for that server alone (not a hardware identifier); the names of the channels you are in; the name you chose in each; who else is in them; when messages pass through and their size to the nearest step; and the network address you connect from.</li>
+          <li><b>It cannot see</b> what your messages say.</li>
+          <li><b>It keeps messages</b> only until every member has received them, or until the maximum age the channel's owner has set, and then wipes them.</li>
+          <li><b>Its log</b> records no addresses and no identifiers, with one exception: an address that gets the server's password wrong.</li>
+        </ul>
+        <p>Taking a server off your phone deletes your device, your place in its channels and the channels you own from that server.</p>
+        <h2 class="mt">Children</h2>
+        <p>The app is not intended for anyone under 18.</p>
+        <h2 class="mt">Changes and contact</h2>
+        <p>If this policy changes, the new version will be published here with a new date. Questions: <span class="mono">support@decentralizeddeaddrop.com</span></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="stack tight">
+      <a class="brand minor" href="index.html">Decentralized Dead Drop</a>
+      <p>Secure communication systems.</p>
+      <p class="small">This website sets no cookies, runs no analytics and keeps no visitor log. The app never contacts it.</p>
+    </div>
+    <div>
+      <h3>The app</h3>
+      <ul><li><a href="download.html">Download</a></li><li><a href="how-it-works.html">How it works</a></li><li><a href="privacy.html">Privacy policy</a></li></ul>
+    </div>
+    <div>
+      <h3>Your server</h3>
+      <ul><li><a href="server.html">Run a server</a></li><li><a href="https://github.com/edward-b-1/decentralizeddeaddrop">Source code</a></li><li><a href="https://github.com/edward-b-1/decentralizeddeaddrop/blob/main/docs/PROTOCOL.md">Protocol</a></li></ul>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

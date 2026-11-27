@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How it works · Decentralized Dead Drop</title>
+<meta name="description" content="What protects your messages in Decentralized Dead Drop, and what does not.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3.5" y="14" width="25" height="14.5" rx="3" fill="none" stroke="currentColor" stroke-width="2.6"/><rect x="11" y="3" width="10" height="15" rx="1.6" fill="currentColor"/></svg>
+      Decentralized Dead Drop
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a aria-current="page" href="how-it-works.html">How it works</a>
+      <a href="server.html">Run a server</a>
+      <a href="privacy.html">Privacy</a>
+      <a class="btn" href="download.html">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="pagehead">
+    <div class="wrap">
+      <p class="eyebrow">How it works</p>
+      <h1>What protects your messages, and what does not.</h1>
+      <p class="lede">A plain account of the design. The full specification, including the decisions still open, is <a href="https://github.com/edward-b-1/decentralizeddeaddrop/blob/main/docs/PROTOCOL.md">PROTOCOL.md</a> in the source.</p>
+      <p class="status narrow"><b>Not independently reviewed.</b> The encryption library this is built on, vodozemac from the Matrix project, was audited in 2022. Decentralized Dead Drop itself has had no outside review. Treat it accordingly.</p>
+    </div>
+  </section>
+
+  <section class="band first">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>Knowing it is the right server</h2>
+        <p>Every connection uses TLS 1.3. The server has a private key, and its fingerprint is a hash of the matching public key, written as 52 letters and digits. The fingerprint travels in every invite link and QR code.</p>
+        <p>A phone that has the fingerprint accepts exactly the server that holds that key. It does not ask a certificate authority, so it works the same for a bare IP address as for a hostname. Someone who takes over the server's address does not have its key, and the app refuses them.</p>
+        <p>If you type an address by hand there is no fingerprint to check against, so the app shows you the one it found and asks you to compare it with the person who runs the server. After that the phone remembers it, and refuses any server that does not hold the same key.</p>
+      </div>
+      <div class="stack">
+        <div class="card"><span class="label">Server fingerprint</span><div class="fp"><span>znpe</span><span>pjc5</span><span>5xy7</span><span>et44</span><span>kfch</span><span>uw5z</span><span>dhaq</span><span>toe5</span><span>r6hf</span><span>xzky</span><span>ddzb</span><span>xkup</span><span>2erq</span></div></div>
+        <div class="term flat"><pre>deaddrop://<span class="hi">203.0.113.7:7443</span>/#fp=<span class="dim">znpepjc5…2erq</span>&amp;t=<span class="dim">5v2vdu44…</span></pre></div>
+        <p class="small">An invite link. The app opens it itself; no website is involved, and nothing after the # is ever sent in a request.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band tint">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>Who you are</h2>
+        <p>There is no phone number, email address or password. Your phone makes its identity keys in its secure hardware, and those keys are your account.</p>
+        <p>You get a fresh identity for every server, so two servers cannot tell that the same phone uses both. The name people see is a label you choose in each channel.</p>
+        <h2 class="mt">Safety numbers</h2>
+        <p>Any two members can compare thirty digits, or scan them as a QR code. Matching numbers mean each phone holds the other's real keys. This is what catches a server that tries to slip a device of its own into a channel under someone else's name.</p>
+      </div>
+      <div class="stack">
+        <div class="card"><span class="label">Safety number with Gran</span><div class="digits"><span>43792</span><span>05729</span><span>00507</span><span>13378</span><span>10572</span><span>01825</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>Channels and the member list</h2>
+        <p>A channel is a group chat on one server. A two-person conversation is a channel with two members.</p>
+        <p>Whoever creates a channel owns it. Joining takes an invite from the owner, after which you ask to join and the owner lets you in. Nobody is put in a channel without asking.</p>
+        <p>The owner's phone signs the whole member list, and every change is a new list with a higher version. Phones never accept an older one. So the server cannot add a member, and cannot keep one the owner removed.</p>
+      </div>
+      <div class="prose">
+        <h2>How messages are sealed</h2>
+        <p>This is the design Signal uses for groups and the one Matrix uses. Each phone has its own sending ratchet for each channel: every message uses the next key, and the used key is destroyed. Phones hand their ratchets to one another through private sessions between each pair of devices.</p>
+        <p>A phone winds its receiving ratchets forward past each message it has opened. Neither that message nor anything earlier can be opened again from what the server held, even by someone who later takes the phone.</p>
+        <p>Sending ratchets are replaced whenever the member list changes, so a removed member gets nothing new and a new member gets nothing old. Messages are padded to fixed sizes (256 bytes, then doubling), so every short text looks the same size.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap two">
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Left out on purpose</p><h2>What it does not have</h2></div>
+        <ul class="list out">
+          <li><b>account</b><span>No phone number, no email address, no password. Your phone's keys are your identity.</span></li>
+          <li><b>central service</b><span>This website is information only. The app never contacts it.</span></li>
+          <li><b>delivery reports or read receipts</b><span>Nobody is told when, or whether, you collected a message.</span></li>
+          <li><b>push service</b><span>The app keeps its own connection to your servers. Nothing about your messages passes through Google.</span></li>
+          <li><b>history on the server</b><span>A server holds a message until it is collected, and no longer.</span></li>
+          <li><b>adverts, analytics or tracking</b><span>In the app, on the server, or on this website.</span></li>
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Built in</p><h2>What it does have</h2></div>
+        <ul class="list">
+          <li><b>End-to-end encryption that moves on</b><span>Every message uses the next key and the used key is destroyed. Keys taken from a phone later cannot open messages recorded earlier.</span></li>
+          <li><b>A fresh identity on every server</b><span>Two servers cannot tell that the same phone uses both.</span></li>
+          <li><b>Safety numbers</b><span>Thirty digits that two people compare, or scan, to be sure nobody is in the middle.</span></li>
+          <li><b>Invites as a QR code or a link</b><span>For a server or for a channel. The app opens the link itself; no website is involved.</span></li>
+          <li><b>Four ways onto a server</b><span>An invite, a password, approval of each new device, or open to anyone. The person running it chooses.</span></li>
+          <li><b>Quiet notifications</b><span>They say only "New message" unless you choose to show more.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="band tint">
+    <div class="wrap stack-lg">
+      <div class="head"><h2>What a server can do, and what it cannot</h2><p class="soft">For a server that has been broken into, or is run by someone hostile.</p></div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="can">It could</th><th class="cannot">But it could not</th></tr></thead>
+          <tbody>
+            <tr><td>Refuse service, or drop or delay messages</td><td>Read any message. It never holds a key.</td></tr>
+            <tr><td>See which devices are in which channel, the names they chose there, and when they send</td><td>Forge a message from a member. Messages are signed.</td></tr>
+            <tr><td>See message sizes (rounded up to fixed steps) and the addresses phones connect from</td><td>Add a member that other phones accept, or keep one the owner removed</td></tr>
+            <tr><td>Keep sealed copies it claims to have wiped</td><td>Open them later, even with a phone seized afterwards</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap two">
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Limits</p><h2>What it does not protect against</h2></div>
+        <ul class="list">
+        <li><b>Someone with your unlocked phone</b><span>They can read what is on it. Messages already opened are stored on the phone, encrypted with a key in its secure hardware.</span></li>
+        <li><b>Being seen to use it</b><span>A server, and anyone watching the network, can see that your phone connects, when, and roughly how much. They cannot see what is said.</span></li>
+        <li><b>Blocking</b><span>Anyone in the middle, or the server, can stop messages getting through. Nothing prevents that.</span></li>
+        <li><b>A member who copies what they read</b><span>Encryption ends at the people in the channel.</span></li>
+        <li><b>Mistakes in this software</b><span>It is new and unreviewed. The source is public so that it can be checked.</span></li>
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Before you choose it</p><h2>What this design costs you</h2></div>
+        <ul class="list">
+        <li><b>Lose your phone, lose your messages</b><span>And your place in every channel. There is no backup and no way to sign in again.</span></li>
+        <li><b>New members see nothing from before</b><span>Neither does a new phone. The server has no history to give.</span></li>
+        <li><b>A channel depends on its owner's phone</b><span>If the owner loses it, the channel can no longer change. Members can still leave.</span></li>
+        <li><b>Someone has to run the server</b><span>And keep its key file safe.</span></li>
+        <li><b>It uses some battery</b><span>Staying connected without a push service is not free.</span></li>
+        <li><b>Text only, Android only, for now</b><span>Pictures, audio and video are planned.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="stack tight">
+      <a class="brand minor" href="index.html">Decentralized Dead Drop</a>
+      <p>Secure communication systems.</p>
+      <p class="small">This website sets no cookies, runs no analytics and keeps no visitor log. The app never contacts it.</p>
+    </div>
+    <div>
+      <h3>The app</h3>
+      <ul><li><a href="download.html">Download</a></li><li><a href="how-it-works.html">How it works</a></li><li><a href="privacy.html">Privacy policy</a></li></ul>
+    </div>
+    <div>
+      <h3>Your server</h3>
+      <ul><li><a href="server.html">Run a server</a></li><li><a href="https://github.com/edward-b-1/decentralizeddeaddrop">Source code</a></li><li><a href="https://github.com/edward-b-1/decentralizeddeaddrop/blob/main/docs/PROTOCOL.md">Protocol</a></li></ul>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

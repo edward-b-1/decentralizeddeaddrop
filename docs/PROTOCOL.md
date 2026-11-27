@@ -376,12 +376,13 @@ a real camera is untried (the reading itself is tested on pictures of the app's 
 screens and of the server's terminal output).
 
 **Running a server:** a container, a compose file, a systemd unit and a set-up script are
-in `deploy/` (`docs/DEPLOYMENT.md`). The container has been built and run; the systemd
-unit and the fail2ban examples have not been run for real.
+in `deploy/` (`docs/DEPLOYMENT.md`). The container has been built and run. The systemd
+unit runs a real server, and fail2ban there reads and matches the server's lines; an
+actual ban has not been triggered.
 
 Not built yet:
 - Blocking a person and reporting, which the Play Store expects (`docs/PLAY_STORE.md`).
 - A proper message database (history is one encrypted file per server), disappearing
   messages and an app lock (§10).
-- The website, an icon and store graphics.
+- An icon and store graphics. The website's pages are in `site/` but not yet published.
 - Everything in §11.

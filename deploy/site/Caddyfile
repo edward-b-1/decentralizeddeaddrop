@@ -1,0 +1,48 @@
+# decentralizeddeaddrop.com: the information website and the app download.
+#
+# Files: the repository's site/ folder copied to /srv/decentralizeddeaddrop, with the
+# app at /srv/decentralizeddeaddrop/download/deaddrop-<version>.apk.
+#
+# The site says it keeps no visitor log, so: no `log` directive here (Caddy then writes
+# no access log), and the error log is stripped of anything about the visitor.
+{
+	log default {
+		output stderr
+		format filter {
+			wrap console
+			fields {
+				request delete
+				remote_ip delete
+				client_ip delete
+				remote delete
+			}
+		}
+	}
+}
+
+www.decentralizeddeaddrop.com {
+	redir https://decentralizeddeaddrop.com{uri} permanent
+}
+
+decentralizeddeaddrop.com {
+	root * /srv/decentralizeddeaddrop
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		# The pages hold no script and load nothing from elsewhere. This makes the browser
+		# enforce that, whatever ends up in a page.
+		Content-Security-Policy "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	header /fonts/* Cache-Control "public, max-age=31536000"
+
+	@apk path *.apk
+	header @apk Content-Type "application/vnd.android.package-archive"
+
+	# /download, /privacy and so on serve download.html, privacy.html.
+	try_files {path} {path}.html
+	file_server
+}

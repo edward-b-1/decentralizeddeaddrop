@@ -12,6 +12,7 @@ independent security review. Do not rely on it yet.
 - `docs/PROTOCOL.md`: the design, and what is and is not built.
 - `docs/DEPLOYMENT.md`: running your own server (files in `deploy/`).
 - `docs/PLAY_STORE.md`: what a Play Store release needs.
+- `site/`: the website, decentralizeddeaddrop.com.
 - `crates/core`: formats shared by the server, the command-line client and the app.
 - `crates/client`: the client engine the app uses, and `deaddrop`, a command-line client built on it.
 - `crates/crypto`: the end-to-end encryption, built on the vodozemac library.
