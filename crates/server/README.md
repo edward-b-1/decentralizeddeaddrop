@@ -8,7 +8,7 @@ The Decentralized Dead Drop server: one program and one SQLite file. Design:
 ```
 deaddropd [serve] [OPTIONS]
 deaddropd fingerprint [--db FILE] [--tls-cert FILE --tls-key FILE]
-deaddropd operator-token [--db FILE]
+deaddropd operator-token [--db FILE] [--public HOST:PORT]
 
 --db FILE               Database file                      [default: deaddrop.db]
 --listen ADDRESS:PORT   Where to listen                    [default: 127.0.0.1:7443]
@@ -21,9 +21,11 @@ deaddropd operator-token [--db FILE]
 On first start the server prints:
 - its **fingerprint**, which phones use to recognise it;
 - a one-time **operator token**: the first device to register with it runs the server;
-- with `--public`, a ready-made `deaddrop://` link holding both.
+- with `--public`, a ready-made `deaddrop://` link holding both, and the same link as a QR
+  code drawn in the terminal, to scan with the app.
 
-`operator-token` issues a new token (for a lost operator phone, or a second operator).
+`operator-token` issues a new token (for a lost operator phone, or a second operator);
+with `--public` it prints the link and QR code too.
 `fingerprint` prints the fingerprint again.
 
 By default the server listens on this computer only. To be reachable, give it an address
@@ -81,12 +83,8 @@ firewall tool can ban whoever is guessing:
 Nothing else is ever logged with an address. Someone who knows the password does not
 appear, nor does anyone using an invite or any other way in.
 
-An example fail2ban filter (not yet tested against a real fail2ban):
-
-```
-[Definition]
-failregex = ^\S+ password-(?:failure|refused) from=<HOST>$
-```
+Example fail2ban files are in `deploy/fail2ban/` (not yet tried against a running
+fail2ban). `docs/DEPLOYMENT.md` covers running the server on a machine of your own.
 
 ## API (version 1)
 

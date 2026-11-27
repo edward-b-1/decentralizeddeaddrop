@@ -9,14 +9,16 @@
 //! accepts exactly the server that holds that key and no other. That is what
 //! [`pinned_client_config`] builds.
 
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
+use std::time::Duration;
 
 use deaddrop_core::encoding::{base32, is_base32};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, WebPkiSupportedAlgorithms, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::server::ParsedCertificate;
-use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, Error, SignatureScheme};
+use rustls::{CertificateError, ClientConfig, ClientConnection, DigitallySignedStruct, Error, SignatureScheme};
 use sha2::{Digest, Sha256};
 
 /// Characters in a fingerprint.
@@ -109,6 +111,83 @@ pub fn pinned_client_config(fingerprint: &str) -> Option<ClientConfig> {
         .with_custom_certificate_verifier(Arc::new(Pinned { fingerprint, algorithms }))
         .with_no_client_auth();
     Some(config)
+}
+
+/// Accepts whichever server answers, so that its fingerprint can be read. The server
+/// must still prove it holds the key it presents.
+#[derive(Debug)]
+struct Anyone {
+    algorithms: WebPkiSupportedAlgorithms,
+}
+
+impl ServerCertVerifier for Anyone {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        match fingerprint(end_entity) {
+            Some(_) => Ok(ServerCertVerified::assertion()),
+            None => Err(Error::InvalidCertificate(CertificateError::BadEncoding)),
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _certificate: &CertificateDer<'_>,
+        _signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        Err(Error::General("TLS 1.2 is not used".into()))
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        certificate: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        verify_tls13_signature(message, certificate, signature, &self.algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.algorithms.supported_schemes()
+    }
+}
+
+/// Asks whatever answers at an address for its fingerprint, for when someone typed the
+/// address by hand and has no link to take the fingerprint from.
+///
+/// **What comes back proves nothing by itself**: it is the fingerprint of whoever
+/// answered, which may be someone in the middle. It is for a person to compare with
+/// the fingerprint the server's operator gave them some other way. Only the TLS
+/// handshake is exchanged; nothing is sent over the connection, which is then closed.
+///
+/// `None` if nothing answers there in time, or what answers is not a TLS 1.3 server.
+pub fn ask_fingerprint(host: &str, port: u16, timeout: Duration) -> Option<String> {
+    let provider = provider();
+    let algorithms = provider.signature_verification_algorithms;
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .ok()?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(Anyone { algorithms }))
+        .with_no_client_auth();
+
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let target = (host, port).to_socket_addrs().ok()?.next()?;
+    let mut tcp = TcpStream::connect_timeout(&target, timeout).ok()?;
+    tcp.set_read_timeout(Some(timeout)).ok()?;
+    tcp.set_write_timeout(Some(timeout)).ok()?;
+    let name = ServerName::try_from(host.to_owned()).ok()?;
+    let mut tls = ClientConnection::new(Arc::new(config), name).ok()?;
+    while tls.is_handshaking() {
+        tls.complete_io(&mut tcp).ok()?;
+    }
+    fingerprint(tls.peer_certificates()?.first()?)
 }
 
 #[cfg(test)]

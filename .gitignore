@@ -3,3 +3,6 @@ target/
 *.db-wal
 *.db-shm
 *.pem
+
+# Where a server is, on the machine that runs it.
+.env

@@ -127,8 +127,11 @@ What remains, and how it is closed:
   (ECDH P-256), both in the Android Keystore; the signing key vouches for the agreement key.
   Device ID = short hash of the signing public key.
 - Display names are labels chosen per channel, not identities.
-- **Safety numbers:** two people can compare a short code (or scan a QR) derived from both
-  signing keys to confirm nobody is in the middle.
+- **Safety numbers:** two people can compare thirty digits (or scan a QR code of them)
+  derived from their two device IDs, to confirm nobody is in the middle. A device ID is a
+  hash of the device's signing key and every other key it uses is signed with that, so
+  matching numbers mean each phone holds the other's real keys. This is what catches a
+  server that slips a device of its own into a join request in someone else's name.
 
 ## 5. Channels
 
@@ -151,6 +154,10 @@ up). Every change of membership is a new roster. Phones never accept an older on
   on presenting a removed member's old, still validly signed pass.
 - A device ID is a hash of the device's signing key, so the roster also pins every
   member's key. Names are unique within a channel, whatever the capitals.
+- A member's name in a channel is part of the roster, so only the owner can change it. A
+  member who wants a new name sends the request as an ordinary sealed message of its own
+  kind; the owner's phone, on collecting it, signs a roster with the new name if it is
+  free. The server sees a message like any other.
 - When a member leaves, the server stops delivering to them at once and tells the others;
   the owner's phone signs a roster without them the next time it is in touch.
 - A member whose device is deleted from the server (they took the server off their phone,
@@ -216,8 +223,13 @@ Limits to know about:
   until they do, and a removed member holds that ratchet. The server stops delivering to
   a removed member at once, so they would also need the server's help to read on.
 - **A hand-over that expires from the queue** before its recipient collects it leaves
-  that sender's following messages unreadable for that recipient until the sender's next
-  ratchet. Asking the sender to hand over again is not built yet.
+  that sender's messages unreadable for that recipient. The recipient's phone notices (a
+  message arrives that it has no keys for), starts a new private session with the sender
+  and asks over it for the hand-over again; the sender's next message then carries it.
+  The same repairs a private session that has gone out of step. What was missed stays
+  missed: the ratchet is handed over at the position it has reached, never an earlier one.
+  A phone asks at most once a minute for each sender and channel, and only members are
+  ever handed anything.
 - **Messages from one sender must be opened in the order sent** (the queue delivers them
   in order). One that turns up after a later one has been opened cannot be opened.
 - **Lost phone, lost history,** as before. And a device's own sent messages are kept by
@@ -300,6 +312,12 @@ Version 1: while switched on, the app keeps one connection open to each of its s
 This costs some battery, more with many servers. A content-free wake-up through a push
 service can be offered later as an opt-in.
 
+As built: the service starts when there is a server to connect to and again after the
+phone restarts, and can be switched off in Settings. A notification for a new message
+says only that there is one, unless the person chooses to have the channel, sender and
+text shown; on a locked phone it never shows more than that there is one. When a server
+cannot be reached the app waits longer between tries, up to a minute.
+
 ## 10. On the phone
 
 - Message history in an encrypted database; the database key is protected by the Keystore.
@@ -346,16 +364,24 @@ acknowledged, so a crash loses nothing and never reuses a key; a message written
 signal goes when the server is next reached. A command-line client, `deaddrop`, is built
 on it.
 
-The **Android app** (`android/`, with the bridge in `crates/ffi`) is a first version:
-adding a server from a link, channels, conversations, invites, join requests, members,
-maximum message age, and the operator's controls. Each server gets its own identity in
-the Android Keystore; engine state and message history are stored encrypted with a
-Keystore key. All of these screens have been driven on an emulator against real servers,
-with the command-line client as the other people; nothing has run on a real phone yet.
+The **Android app** (`android/`, with the bridge in `crates/ffi`): adding a server by QR
+code, link or typed address (with the fingerprint check of §2), channels, conversations,
+invites as links and QR codes, join requests, members, names, safety numbers, maximum
+message age, the operator's controls and device list, and receiving in the background
+with notifications (§9). Each server gets its own identity in the Android Keystore;
+engine state and message history are stored encrypted with a Keystore key. The screens
+have been driven on an emulator against real servers, with the command-line client as
+the other people. **Nothing has run on a real phone yet**, and reading a QR code through
+a real camera is untried (the reading itself is tested on pictures of the app's own
+screens and of the server's terminal output).
+
+**Running a server:** a container, a compose file, a systemd unit and a set-up script are
+in `deploy/` (`docs/DEPLOYMENT.md`). The container has been built and run; the systemd
+unit and the fail2ban examples have not been run for real.
 
 Not built yet:
-- In the app: receiving while it is closed, QR codes, typing a server's address by hand,
-  safety numbers (`android/README.md` has the list).
-- **Asking again for a lost hand-over** (§6), and recovering a private session that has
-  gone out of step.
-- Everything in §9 to §11.
+- Blocking a person and reporting, which the Play Store expects (`docs/PLAY_STORE.md`).
+- A proper message database (history is one encrypted file per server), disappearing
+  messages and an app lock (§10).
+- The website, an icon and store graphics.
+- Everything in §11.

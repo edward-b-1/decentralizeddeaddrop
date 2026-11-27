@@ -1,0 +1,39 @@
+# Runs the Dead Drop server without Docker. See docs/DEPLOYMENT.md.
+#
+#   install -m 755 deaddropd /usr/local/bin/deaddropd
+#   echo 'DEADDROP_PUBLIC=203.0.113.7:7443' > /etc/deaddrop.env
+#   install -m 644 deaddropd.service /etc/systemd/system/deaddropd.service
+#   systemctl enable --now deaddropd
+#   journalctl -u deaddropd        (the first start prints the operator's link and QR code)
+[Unit]
+Description=Decentralized Dead Drop server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/deaddrop.env
+ExecStart=/usr/local/bin/deaddropd serve --db /var/lib/deaddrop/deaddrop.db --listen 0.0.0.0:7443 --public ${DEADDROP_PUBLIC}
+Restart=on-failure
+RestartSec=5
+
+# Its own user, and nothing of the machine but /var/lib/deaddrop.
+DynamicUser=yes
+StateDirectory=deaddrop
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

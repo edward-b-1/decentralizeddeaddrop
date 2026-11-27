@@ -1,6 +1,6 @@
 //! One identity on one server.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use deaddrop_core::encoding::{b64, random_id, unb64};
@@ -69,6 +69,18 @@ impl Channel {
     }
 }
 
+/// A device registered on a server, as its operator sees it: an ID and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerDevice {
+    pub device: String,
+    /// Registered but not yet approved.
+    pub waiting: bool,
+    pub operator: bool,
+}
+
+/// How long to wait before asking the same member for the same channel's keys again.
+const ASK_AGAIN_SECONDS: i64 = 60;
+
 /// Someone asking to join a channel this account owns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JoinRequest {
@@ -130,6 +142,8 @@ pub struct Account {
     channels: BTreeMap<String, Channel>,
     asked: Vec<Asked>,
     outbox: VecDeque<Outgoing>,
+    /// When each (channel, member) was last asked to hand their keys over again.
+    asked_keys: HashMap<(String, String), i64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -144,6 +158,25 @@ struct Saved {
     channels: Vec<Channel>,
     asked: Vec<Asked>,
     outbox: Vec<Outgoing>,
+}
+
+/// The server's rule for names: some characters, no spaces at the ends, nothing unprintable.
+fn valid_name(name: &str, max_chars: usize) -> bool {
+    let count = name.chars().count();
+    count >= 1 && count <= max_chars && name.trim() == name && !name.chars().any(char::is_control)
+}
+
+/// Whether `device` could be called `name` in a channel: names are unique in a channel,
+/// whatever the capitals.
+fn name_is_free(channel: &Channel, device: &str, name: &str) -> Result<(), ClientError> {
+    if !valid_name(name, 32) {
+        return Err(ClientError::Invalid("a name is 1 to 32 characters"));
+    }
+    let taken = channel
+        .members
+        .iter()
+        .any(|member| member.device != device && member.name.to_lowercase() == name.to_lowercase());
+    if taken { Err(ClientError::Invalid("someone else in this channel has that name")) } else { Ok(()) }
 }
 
 fn text(value: &Value, what: &'static str) -> Result<String, ClientError> {
@@ -190,6 +223,7 @@ impl Account {
             channels: BTreeMap::new(),
             asked: Vec::new(),
             outbox: VecDeque::new(),
+            asked_keys: HashMap::new(),
         };
         if reply["status"] == "active" {
             account.publish_keys(keys)?;
@@ -339,6 +373,23 @@ impl Account {
             .iter()
             .filter(|device| device["status"] == "pending")
             .filter_map(|device| device["device_id"].as_str().map(str::to_owned))
+            .collect())
+    }
+
+    /// Every device registered on the server. Operator only. The server knows devices
+    /// by ID alone: names exist only inside channels.
+    pub fn devices(&mut self, keys: &dyn DeviceKeys) -> Result<Vec<ServerDevice>, ClientError> {
+        let reply = self.request(keys, Method::GET, "/v1/operator/devices", None)?;
+        let devices = reply["devices"].as_array().map(Vec::as_slice).unwrap_or_default();
+        Ok(devices
+            .iter()
+            .filter_map(|device| {
+                Some(ServerDevice {
+                    device: device["device_id"].as_str()?.to_owned(),
+                    waiting: device["status"] == "pending",
+                    operator: device["operator"] == true,
+                })
+            })
             .collect())
     }
 
@@ -502,11 +553,82 @@ impl Account {
 
     /// Changes a channel's maximum message age. Owner only.
     pub fn set_max_age(&mut self, keys: &dyn DeviceKeys, channel: &str, max_age: u64) -> Result<(), ClientError> {
+        let name = self.owned(channel)?.name.clone();
+        self.publish_record(keys, channel, &name, max_age)
+    }
+
+    /// Renames a channel. Owner only.
+    pub fn rename_channel(&mut self, keys: &dyn DeviceKeys, channel: &str, name: &str) -> Result<(), ClientError> {
+        let max_age = self.owned(channel)?.max_age;
+        if !valid_name(name, 64) {
+            return Err(ClientError::Invalid("a channel's name is 1 to 64 characters"));
+        }
+        self.publish_record(keys, channel, name, max_age)
+    }
+
+    /// The safety number this device shares with another (`keys::safety_number`).
+    pub fn safety_number(&self, device: &str) -> String {
+        keys::safety_number(&self.device, device)
+    }
+
+    /// Changes this device's name in a channel. Returns whether it is done already.
+    ///
+    /// Names are part of the member list, which only the owner signs. The owner's own
+    /// name changes at once. Anyone else's request travels to the owner as a sealed
+    /// message, and the owner's phone signs the new list when it next collects.
+    pub fn set_my_name(
+        &mut self,
+        keys: &dyn DeviceKeys,
+        channel: &str,
+        name: &str,
+        save: Save,
+    ) -> Result<bool, ClientError> {
+        let held = self.channels.get(channel).ok_or(ClientError::UnknownChannel)?;
+        name_is_free(held, &self.device, name)?;
+        if held.owner == self.device {
+            let device = self.device.clone();
+            self.rename_member(keys, channel, &device, name)?;
+            return Ok(true);
+        }
+        self.post(keys, channel, json!({ "t": "name", "name": name, "at": now() }), save)?;
+        Ok(false)
+    }
+
+    /// As the owner: signs a member list with one member's name changed. Does nothing
+    /// if the name is not allowed or is someone else's already.
+    fn rename_member(
+        &mut self,
+        keys: &dyn DeviceKeys,
+        channel: &str,
+        device: &str,
+        name: &str,
+    ) -> Result<bool, ClientError> {
+        let held = self.owned(channel)?;
+        if name_is_free(held, device, name).is_err() || held.name_of(device).is_none_or(|current| current == name) {
+            return Ok(false);
+        }
+        let mut members = held.members.clone();
+        for member in &mut members {
+            if member.device == device {
+                member.name = name.to_owned();
+            }
+        }
+        self.publish_roster(keys, channel, members)?;
+        Ok(true)
+    }
+
+    fn publish_record(
+        &mut self,
+        keys: &dyn DeviceKeys,
+        channel: &str,
+        name: &str,
+        max_age: u64,
+    ) -> Result<(), ClientError> {
         let current = self.owned(channel)?.clone();
         let record = ChannelRecord {
             v: 1,
             id: current.id.clone(),
-            name: current.name.clone(),
+            name: name.to_owned(),
             owner: current.owner.clone(),
             max_age,
             version: current.record_version + 1,
@@ -711,11 +833,15 @@ impl Account {
     /// `save` is called once the message is sealed and before anything is posted, so a
     /// crash at any point neither loses the message nor reuses a key.
     pub fn send(&mut self, keys: &dyn DeviceKeys, channel: &str, text: &str, save: Save) -> Result<bool, ClientError> {
+        self.post(keys, channel, json!({ "t": "text", "body": text, "at": now() }), save)
+    }
+
+    /// Seals something for everyone in a channel and posts it.
+    fn post(&mut self, keys: &dyn DeviceKeys, channel: &str, payload: Value, save: Save) -> Result<bool, ClientError> {
         if !self.channels.contains_key(channel) {
             return Err(ClientError::UnknownChannel);
         }
         self.connect_members(keys, channel)?;
-        let payload = json!({ "t": "text", "body": text, "at": now() });
         let sealed = self.messenger.encrypt(channel, payload.to_string().as_bytes(), now())?;
         for (device, body) in sealed.shares {
             self.outbox.push_back(Outgoing { channel: channel.to_owned(), to: Some(device), body: b64(&body) });
@@ -773,6 +899,8 @@ impl Account {
         if self.refresh(keys)? {
             events.push(Event::ChannelsChanged);
         }
+        // Members whose keys for a channel this device turned out not to have.
+        let mut lost: Vec<(String, String)> = Vec::new();
 
         loop {
             let reply = self.request(keys, Method::GET, "/v1/queue", None)?;
@@ -782,6 +910,7 @@ impl Account {
             }
             let mut refreshed = false;
             let mut ids = Vec::new();
+            let mut renames = Vec::new();
             for message in &waiting {
                 let (Some(id), Some(channel), Some(sender), Some(body)) = (
                     message["id"].as_str(),
@@ -809,35 +938,101 @@ impl Account {
                     Ok(Incoming::Message(plaintext)) => {
                         let Ok(payload) = serde_json::from_slice::<Value>(&plaintext) else { continue };
                         // Kinds of message this version does not know are skipped.
-                        if payload["t"] != "text" {
-                            continue;
+                        match payload["t"].as_str() {
+                            Some("text") => events.push(Event::Message {
+                                channel: channel.to_owned(),
+                                sender: sender.to_owned(),
+                                sender_name: self
+                                    .channels
+                                    .get(channel)
+                                    .and_then(|c| c.name_of(sender))
+                                    .map(str::to_owned),
+                                text: payload["body"].as_str().unwrap_or_default().to_owned(),
+                                sent: payload["at"].as_i64().unwrap_or(0),
+                            }),
+                            // A member asking the owner for a new name in the channel.
+                            Some("name") => {
+                                if let Some(name) = payload["name"].as_str() {
+                                    renames.push((channel.to_owned(), sender.to_owned(), name.to_owned()));
+                                }
+                            }
+                            _ => {}
                         }
-                        events.push(Event::Message {
-                            channel: channel.to_owned(),
-                            sender: sender.to_owned(),
-                            sender_name: self.channels.get(channel).and_then(|c| c.name_of(sender)).map(str::to_owned),
-                            text: payload["body"].as_str().unwrap_or_default().to_owned(),
-                            sent: payload["at"].as_i64().unwrap_or(0),
-                        });
                     }
-                    Ok(Incoming::KeysReceived) => {}
+                    Ok(Incoming::KeysReceived | Incoming::KeysWanted) => {}
                     // Delivered twice (acknowledging was interrupted last time): already shown.
                     Err(CryptoError::AlreadyOpened) => {}
-                    // Only a message that cannot be read is worth telling the person about.
-                    Err(_) if body.first() == Some(&2) => {
-                        events.push(Event::Unreadable { channel: channel.to_owned(), sender: sender.to_owned() });
+                    Err(error) => {
+                        // The sender's keys never arrived, or the private session they came
+                        // over is out of step: ask for them again.
+                        let keys_lost = matches!(error, CryptoError::UnknownSession)
+                            || (body.first() == Some(&1) && matches!(error, CryptoError::CannotOpen));
+                        if keys_lost {
+                            lost.push((channel.to_owned(), sender.to_owned()));
+                        }
+                        // Only a message that cannot be read is worth telling the person about.
+                        if body.first() == Some(&2) {
+                            events.push(Event::Unreadable { channel: channel.to_owned(), sender: sender.to_owned() });
+                        }
                     }
-                    Err(_) => {}
                 }
             }
             save(&self.to_bytes());
             self.request(keys, Method::POST, "/v1/queue/ack", Some(json!({ "ids": ids })))?;
+            for (channel, device, name) in renames {
+                // Only the owner's phone acts on these; a refusal is not worth stopping for.
+                match self.rename_member(keys, &channel, &device, &name) {
+                    Ok(true) => events.push(Event::ChannelsChanged),
+                    Ok(false)
+                    | Err(ClientError::NotOwner | ClientError::UnknownChannel | ClientError::Refused { .. }) => {}
+                    Err(other) => return Err(other),
+                }
+            }
             if ids.is_empty() {
                 break;
             }
         }
+        lost.sort();
+        lost.dedup();
+        for (channel, sender) in lost {
+            self.ask_for_keys(keys, &channel, &sender)?;
+        }
+        if !self.outbox.is_empty() {
+            save(&self.to_bytes());
+            self.flush(keys, save)?;
+        }
         self.top_up_prekeys(keys, save)?;
         Ok(events)
+    }
+
+    /// Asks a member to hand over their keys for a channel again, over a new private
+    /// session, so that their later messages can be read. At most once a minute for
+    /// each member and channel. What was already missed stays missed.
+    fn ask_for_keys(&mut self, keys: &dyn DeviceKeys, channel: &str, sender: &str) -> Result<(), ClientError> {
+        let (now, asked) = (now(), (channel.to_owned(), sender.to_owned()));
+        if self.asked_keys.get(&asked).is_some_and(|at| now - at < ASK_AGAIN_SECONDS) {
+            return Ok(());
+        }
+        let member = self.channels.get(channel).is_some_and(|held| held.name_of(sender).is_some());
+        if !member || !self.messenger.knows_peer(sender) {
+            return Ok(());
+        }
+        let path = format!("/v1/channels/{channel}/keys/claim");
+        let reply = match self.request(keys, Method::POST, &path, Some(json!({ "devices": [sender] }))) {
+            Ok(reply) => reply,
+            Err(ClientError::Refused { .. }) => return Ok(()),
+            Err(other) => return Err(other),
+        };
+        let Ok(prekey) = serde_json::from_value::<SignedKey>(reply["claimed"][0]["prekey"].clone()) else {
+            return Ok(());
+        };
+        if self.messenger.start_session(sender, &prekey).is_err() {
+            return Ok(());
+        }
+        let Ok(body) = self.messenger.ask_again(channel, sender) else { return Ok(()) };
+        self.outbox.push_back(Outgoing { channel: channel.to_owned(), to: Some(sender.to_owned()), body: b64(&body) });
+        self.asked_keys.insert(asked, now);
+        Ok(())
     }
 
     /// Opens the connection over which the server says when to [`Account::sync`].
@@ -885,6 +1080,7 @@ impl Account {
             channels: saved.channels.into_iter().map(|channel| (channel.id.clone(), channel)).collect(),
             asked: saved.asked,
             outbox: saved.outbox.into_iter().collect(),
+            asked_keys: HashMap::new(),
         })
     }
 }

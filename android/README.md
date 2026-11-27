@@ -30,14 +30,27 @@ with `deaddropd --public 10.0.2.2:7443` so the links it prints work from the emu
 | `keys/Keys.kt` | `DeviceKeys`: an identity's two long-term keys in the Android Keystore, one identity per server. `Vault`: files encrypted with a Keystore key (engine state, message history). |
 | `data/Servers.kt` | Every server the phone is on: its engine session, a background thread that collects messages, and what the screens show. |
 | `ui/` | The screens. `DeadDropUi.kt` holds the tabs and navigation. |
+| `ui/Qr.kt`, `ui/QrCodes.kt` | QR codes, made and read on the phone (ZXing, with CameraX for the camera). No Google service is involved. |
+| `service/Background.kt` | Staying connected while the app is closed: the foreground service, notifications, the receiver that reconnects after a restart, and the two settings. |
 
 Opening a `deaddrop://` link starts the app on the right screen (add a server, or join a
 channel).
 
+## Release builds
+
+`./gradlew bundleRelease` makes a shrunk App Bundle, signed if `keystore.properties`
+exists here (git-ignored; `docs/PLAY_STORE.md` says what goes in it). Build the engine
+first **without** `debug`: a debug engine makes the app several hundred megabytes.
+
+## Tests
+
+`./gradlew testDebugUnitTest` runs the QR code tests on this computer. Everything else in
+the app is screens over the Rust engine, which has its own tests (`cargo test --workspace`).
+
 ## Not built yet
 
-- Receiving while the app is closed (it collects messages only while it is running).
-- Scanning and showing QR codes, and adding a server by typing its address.
-- Renaming a channel, changing your name in one, safety numbers.
+- Blocking a person and reporting (`docs/PLAY_STORE.md` section 7).
 - A proper message database (history is one encrypted file per server).
-- Release signing and a designed icon.
+- A designed icon.
+- Nothing has run on a real phone: scanning with a real camera, and staying connected
+  through a night on mobile data, are the things most in need of trying.

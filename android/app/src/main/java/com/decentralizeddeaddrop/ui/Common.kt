@@ -33,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -228,6 +229,47 @@ fun Fingerprint(fingerprint: String) {
     }
 }
 
+/** A safety number: six groups of five digits, three to a line. */
+@Composable
+fun SafetyDigits(number: String) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 12.dp).clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        number.split(" ").chunked(3).forEach { line ->
+            Row(Modifier.fillMaxWidth()) {
+                line.forEach { group -> Text(group, Modifier.weight(1f), fontFamily = FontFamily.Monospace, fontSize = 20.sp) }
+            }
+        }
+    }
+}
+
+/** Says something the person should read before going on. */
+@Composable
+fun Notice(text: String, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        confirmButton = { TextButton(onClick = onClose) { Text("OK") } },
+        text = { Text(text) },
+    )
+}
+
+/** Asks for one line of text. */
+@Composable
+fun TextDialog(title: String, label: String, initial: String, maxLength: Int, onClose: () -> Unit, onDone: (String) -> Unit) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(title, fontSize = 18.sp) },
+        text = { OutlinedTextField(text, { text = it.take(maxLength) }, label = { Text(label) }, singleLine = true) },
+        confirmButton = {
+            TextButton(onClick = { onDone(text.trim()) }, enabled = text.isNotBlank() && text.trim() != initial) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
+}
+
 /** Asks before doing something that cannot be undone. */
 @Composable
 fun Confirm(question: String, detail: String, yes: String, onYes: () -> Unit, onNo: () -> Unit) {
@@ -248,9 +290,11 @@ fun LinkDialog(title: String, note: String, link: String, onClose: () -> Unit) {
         onDismissRequest = onClose,
         title = { Text(title, fontSize = 18.sp) },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(note, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.size(10.dp))
+                Spacer(Modifier.size(12.dp))
+                QrCode(link, Modifier.fillMaxWidth())
+                Spacer(Modifier.size(12.dp))
                 SelectionContainer { Text(link, fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 17.sp) }
             }
         },

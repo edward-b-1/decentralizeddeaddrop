@@ -9,3 +9,8 @@ local.properties
 # Made by build-engine.sh from the Rust crates.
 /app/src/main/jniLibs/
 /app/src/main/java/com/decentralizeddeaddrop/engine/
+
+# The upload key: never in the repository (docs/PLAY_STORE.md).
+keystore.properties
+*.jks
+*.keystore

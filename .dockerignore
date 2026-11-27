@@ -1,0 +1,5 @@
+# Only the Rust sources are needed to build the server.
+*
+!Cargo.toml
+!Cargo.lock
+!crates

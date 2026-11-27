@@ -5,12 +5,15 @@
 A text messenger where every community runs its own server. The server is a dead drop: it
 holds sealed messages only until they have been collected, and can never read them.
 
-**Status: early development.** The server, the encryption and a first version of the
-Android app exist. It has had no independent security review. Do not rely on it yet.
+**Status: early development.** The server, the encryption and the Android app exist
+and work together on an emulator; nothing has run on a real phone yet. It has had no
+independent security review. Do not rely on it yet.
 
 - `docs/PROTOCOL.md`: the design, and what is and is not built.
-- `crates/core`: formats shared by the server, test clients and (later) the app.
-- `crates/client`: the client engine the app will use, and `deaddrop`, a command-line client built on it.
+- `docs/DEPLOYMENT.md`: running your own server (files in `deploy/`).
+- `docs/PLAY_STORE.md`: what a Play Store release needs.
+- `crates/core`: formats shared by the server, the command-line client and the app.
+- `crates/client`: the client engine the app uses, and `deaddrop`, a command-line client built on it.
 - `crates/crypto`: the end-to-end encryption, built on the vodozemac library.
 - `crates/tls`: the server fingerprint, and the check a phone makes with it.
 - `crates/ffi`: the bridge that lets the Android app call the client engine.
@@ -28,8 +31,8 @@ cargo run -p deaddropd
 
 ## Building for Android
 
-The app will use `crates/core`, `crates/crypto` and `crates/tls` as native code. That
-needs the Android NDK, Rust's Android targets and `cargo-ndk`:
+The app uses the Rust crates as native code. That needs the Android NDK, Rust's
+Android targets and `cargo-ndk` (then see `android/README.md`):
 
 ```
 sdkmanager --install "ndk;30.0.16248370"

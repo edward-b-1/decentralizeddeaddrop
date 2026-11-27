@@ -1,5 +1,6 @@
 package com.decentralizeddeaddrop.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
+import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -161,11 +166,32 @@ fun ChannelDetailsScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit
     val requests = channel.asking
     var invite by remember { mutableStateOf<String?>(null) }
     var confirming by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var naming by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+
+    if (renaming) {
+        TextDialog("Channel name", "Name", channel.name, 64, onClose = { renaming = false }) { name ->
+            renaming = false
+            runner.run { Servers.renameChannel(channel.slot, channel.id, name) }
+        }
+    }
+    if (naming) {
+        TextDialog("Your name in ${channel.name}", "Name", channel.myName, 32, onClose = { naming = false }) { name ->
+            naming = false
+            runner.run {
+                if (!Servers.setMyName(channel.slot, channel.id, name)) {
+                    notice = "Asked. Names are part of the member list, which only the channel's owner signs. Their phone makes the change when it is next connected."
+                }
+            }
+        }
+    }
+    notice?.let { text -> Notice(text) { notice = null } }
 
     invite?.let { link ->
         LinkDialog(
             title = "Invite to ${channel.name}",
-            note = "Send this to one person who is already on ${server?.label ?: "the server"}. It works once, for a day. They ask to join; you then let them in.",
+            note = "Show or send this to one person who is already on ${server?.label ?: "the server"}. It works once, for a day. They ask to join; you then let them in.",
             link = link,
             onClose = { invite = null },
         )
@@ -195,7 +221,8 @@ fun ChannelDetailsScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit
             )
         }
         Heading("This channel")
-        Item("Channel name", value = channel.name)
+        Item("Channel name", value = channel.name, onClick = if (channel.ownedByMe) ({ renaming = true }) else null)
+        Item("Your name here", value = channel.myName, onClick = { naming = true })
         Item(
             "Maximum message age",
             detail = "Undelivered messages are wiped from the server after this",
@@ -210,22 +237,22 @@ fun ChannelDetailsScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit
             onClick = { go(Screen.Members(channel.key)) },
         )
         if (channel.ownedByMe) {
-            Item("Invite someone", detail = "Make a link to send them", onClick = {
+            Item("Invite someone", detail = "Make a link or QR code", onClick = {
                 runner.run { invite = Servers.inviteToChannel(channel.slot, channel.id) }
             })
         }
+        Item("Safety numbers", detail = "Check you are talking to the right people", onClick = { go(Screen.Members(channel.key)) })
         Heading(" ")
         if (channel.ownedByMe) {
             Item("Delete channel", detail = "Removes it for everyone. Cannot be undone.", danger = true, onClick = { confirming = true })
         } else {
             Item("Leave channel", danger = true, onClick = { confirming = true })
         }
-        // Not yet here: renaming, changing your name in the channel, safety numbers.
     }
 }
 
 @Composable
-fun MembersScreen(channel: ChannelUi, back: () -> Unit) {
+fun MembersScreen(channel: ChannelUi, back: () -> Unit, go: (Screen) -> Unit) {
     val runner = rememberRunner()
     var removing by remember { mutableStateOf<String?>(null) }
     removing?.let { device ->
@@ -236,14 +263,17 @@ fun MembersScreen(channel: ChannelUi, back: () -> Unit) {
         })
     }
     Page(title = "Members", subtitle = channel.name, onBack = back) {
+        Note("Tap someone to see the safety number you share with them.")
         channel.members.forEach { member ->
             Item(
                 member.name,
-                detail = when {
-                    member.hasLeft -> "Has left"
-                    member.device == channel.owner -> "Owner"
-                    else -> null
-                },
+                detail = listOfNotNull(
+                    "You".takeIf { member.isMe },
+                    "Owner".takeIf { member.device == channel.owner },
+                    "Has left".takeIf { member.hasLeft },
+                    "Safety number checked".takeIf { member.verified },
+                ).joinToString(" · ").ifEmpty { null },
+                onClick = if (member.isMe || member.hasLeft) null else ({ go(Screen.Safety(channel.key, member.device)) }),
                 end = {
                     if (channel.ownedByMe && member.device != channel.owner && !member.hasLeft) {
                         TextButton(onClick = { removing = member.device }, enabled = !runner.busy) {
@@ -289,7 +319,14 @@ private val AGES = listOf(3600L, 6 * 3600L, 24 * 3600L, 3 * 86_400L, 7 * 86_400L
 fun MaxAgeScreen(channel: ChannelUi, back: () -> Unit) {
     val runner = rememberRunner()
     var chosen by remember { mutableLongStateOf(channel.maxAge) }
-    val choices = if (channel.maxAge in AGES) AGES else (AGES + channel.maxAge).sorted()
+    var custom by remember { mutableStateOf(false) }
+    val choices = (AGES + channel.maxAge + chosen).distinct().sorted()
+    if (custom) {
+        AgeDialog(onClose = { custom = false }) { seconds ->
+            custom = false
+            chosen = seconds
+        }
+    }
     Page(
         title = "Maximum message age",
         subtitle = channel.name,
@@ -317,6 +354,7 @@ fun MaxAgeScreen(channel: ChannelUi, back: () -> Unit) {
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
+            Item("Another length", detail = "A number of minutes, hours or days", onClick = { custom = true })
         } else {
             Item("This channel", value = ageText(channel.maxAge))
             Note("Only the channel's owner can change this.")
@@ -368,11 +406,20 @@ fun NewChannelScreen(servers: List<ServerUi>, back: () -> Unit, created: (String
 }
 
 @Composable
-fun JoinChannelScreen(initialLink: String, back: () -> Unit) {
+fun JoinChannelScreen(initialLink: String, back: () -> Unit, openLink: (String) -> Unit) {
     val runner = rememberRunner()
     var link by rememberSaveable { mutableStateOf(initialLink) }
     var myName by rememberSaveable { mutableStateOf("") }
     var asked by remember { mutableStateOf(false) }
+    var scanning by rememberSaveable { mutableStateOf(false) }
+    if (scanning) {
+        BackHandler { scanning = false }
+        ScanScreen("Scan an invite", "Point the camera at the invite code on the channel owner's phone.", back = { scanning = false }) {
+            scanning = false
+            openLink(it)
+        }
+        return
+    }
     val info = readLink(link.trim())
     val slot = Servers.serverFor(link.trim())
     val problem = when {
@@ -406,8 +453,9 @@ fun JoinChannelScreen(initialLink: String, back: () -> Unit) {
             Note("The channel's owner has been asked. It appears in your list as soon as they let you in.")
             return@Page
         }
-        Note("Paste the invite link the channel's owner sent you.")
-        OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth(), label = { Text("Invite link") }, minLines = 3, maxLines = 5)
+        Primary("Scan a QR code", Modifier.fillMaxWidth().padding(top = 14.dp)) { scanning = true }
+        Note("Scan the invite on the channel owner's phone, or paste the link they sent you.")
+        OutlinedTextField(link, { link = it }, Modifier.fillMaxWidth(), label = { Text("Or paste a link") }, minLines = 3, maxLines = 5)
         if (problem != null) Text(problem, Modifier.padding(top = 8.dp), fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
         OutlinedTextField(myName, { myName = it.take(32) }, Modifier.fillMaxWidth().padding(top = 10.dp), label = { Text("Your name in this channel") }, singleLine = true)
         Note("The app checks that the channel really belongs to the person the invite came from before it asks.")
@@ -419,5 +467,103 @@ fun JoinChannelScreen(initialLink: String, back: () -> Unit) {
             Fingerprint(info.fingerprint)
             Note("This phone is not on that server yet. Asking to join puts it on, with a new identity. The app connects only to the server with this fingerprint.")
         }
+    }
+}
+
+// ---------------------------------------------------------------- another maximum message age
+
+private val UNITS = listOf("Minutes" to 60L, "Hours" to 3600L, "Days" to 86_400L)
+
+@Composable
+private fun AgeDialog(onClose: () -> Unit, onSet: (Long) -> Unit) {
+    var number by remember { mutableStateOf("") }
+    var unit by remember { mutableIntStateOf(1) }
+    // Up to ten years: long enough for anyone, short enough that nothing overflows.
+    val seconds = number.toLongOrNull()?.times(UNITS[unit].second)?.takeIf { it in 60L..(3660L * 86_400L) }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Another length", fontSize = 18.sp) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    number,
+                    { number = it.filter(Char::isDigit).take(5) },
+                    label = { Text("How many") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                UNITS.forEachIndexed { index, (name, _) ->
+                    Row(
+                        Modifier.fillMaxWidth().selectable(selected = unit == index, role = Role.RadioButton, onClick = { unit = index }),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = unit == index, onClick = null, modifier = Modifier.padding(end = 12.dp, top = 8.dp, bottom = 8.dp))
+                        Text(name, fontSize = 15.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { seconds?.let(onSet) }, enabled = seconds != null) { Text("Set") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Cancel") } },
+    )
+}
+
+// ---------------------------------------------------------------- safety numbers
+
+/**
+ * The safety number this phone shares with one member. If both phones show the same
+ * number, each holds the other's real keys and nobody is in between.
+ */
+@Composable
+fun SafetyScreen(channel: ChannelUi, device: String, back: () -> Unit) {
+    val member = channel.members.firstOrNull { it.device == device }
+    if (member == null) {
+        LaunchedEffect(Unit) { back() }
+        return
+    }
+    val runner = rememberRunner()
+    var number by remember { mutableStateOf<String?>(null) }
+    var scanning by rememberSaveable { mutableStateOf(false) }
+    var outcome by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(device) { number = runCatching { Servers.safetyNumber(channel.slot, device) }.getOrNull() }
+
+    val mine = number
+    if (scanning && mine != null) {
+        BackHandler { scanning = false }
+        ScanScreen("Scan ${member.name}'s code", "Point the camera at the safety number code on ${member.name}'s phone.", back = { scanning = false }) { scanned ->
+            scanning = false
+            when (safetyMatches(scanned, mine)) {
+                true -> {
+                    outcome = "The numbers match. This phone and ${member.name}'s hold each other's real keys, and nobody is in between."
+                    runner.run { Servers.setVerified(channel.slot, device, true) }
+                }
+                false -> {
+                    outcome = "The numbers do NOT match. The device listed as ${member.name} in this channel is not the phone you scanned. Do not rely on this channel for anything private, and tell its owner."
+                    runner.run { Servers.setVerified(channel.slot, device, false) }
+                }
+                null -> outcome = "That code is not a safety number. Ask ${member.name} to open this same screen for you on their phone."
+            }
+        }
+        return
+    }
+    outcome?.let { text -> Notice(text) { outcome = null } }
+
+    Page(title = "Safety number", subtitle = "You and ${member.name}", onBack = back) {
+        Note("If ${member.name}'s phone shows this same number for you, your messages are sealed with each other's real keys and nobody is in between. Compare it in person, or on a call where you know their voice.")
+        if (mine == null) {
+            Note("Working it out…")
+            return@Page
+        }
+        SafetyDigits(mine)
+        QrCode(safetyCode(mine), Modifier.fillMaxWidth().padding(horizontal = 56.dp, vertical = 4.dp))
+        Secondary("Scan their code instead", Modifier.fillMaxWidth().padding(top = 10.dp)) { scanning = true }
+        Item(
+            "I have compared this number",
+            detail = if (member.verified) "Marked as checked on this phone" else "Switch on once you have",
+            end = { Switch(member.verified, { on -> runner.run { Servers.setVerified(channel.slot, device, on) } }, enabled = !runner.busy) },
+        )
+        Item("Their device ID", detail = device)
+        Note("If the numbers differ, the device listed as ${member.name} is not the phone in their hand. Do not rely on this channel for anything private, and tell its owner.")
+        Note("${member.name} gets a new number if they move to a new phone or join the server again.")
     }
 }

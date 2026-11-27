@@ -45,9 +45,38 @@ pub fn session_message(server_id: &str, challenge: &str) -> Vec<u8> {
     format!("deaddrop/session/v1\n{server_id}\n{challenge}").into_bytes()
 }
 
+/// The safety number two devices share: thirty digits in six groups, the same on both
+/// phones whichever way round they are asked.
+///
+/// A device ID is a hash of that device's signing key, and every other key a device
+/// uses is signed with it. So if two people read the same number on their two phones,
+/// each phone holds the other's real keys, and no server or third person has put a
+/// device of their own in between.
+pub fn safety_number(one: &str, other: &str) -> String {
+    let (first, second) = if one <= other { (one, other) } else { (other, one) };
+    let digest = Sha256::digest(format!("deaddrop/safety/v1\n{first}\n{second}"));
+    let groups = digest.chunks(5).take(6).map(|chunk| {
+        let number = chunk.iter().fold(0u64, |number, byte| (number << 8) | u64::from(*byte));
+        format!("{:05}", number % 100_000)
+    });
+    groups.collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_safety_number_is_the_same_from_both_ends_and_differs_for_anyone_else() {
+        let (anna, ben, eve) = ("t2n6vrwrnowcmdaw", "abcdefghijklmnop", "abcdefghijklmnoq");
+        let number = safety_number(anna, ben);
+        assert_eq!(number, safety_number(ben, anna));
+        assert_eq!(number.len(), 35);
+        assert!(number.split(' ').all(|group| group.len() == 5 && group.chars().all(|c| c.is_ascii_digit())));
+        assert_ne!(number, safety_number(anna, eve));
+        // Fixed, so that a later version cannot change it by accident.
+        assert_eq!(number, "43792 05729 00507 13378 10572 01825");
+    }
     use crate::encoding::unb64;
 
     // A key and two signatures made by the JDK's `SHA256withECDSA`, the same provider

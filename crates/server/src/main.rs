@@ -11,7 +11,7 @@ deaddropd: the Decentralized Dead Drop server
 USAGE:
     deaddropd [serve] [OPTIONS]
     deaddropd fingerprint [--db FILE] [--tls-cert FILE --tls-key FILE]
-    deaddropd operator-token [--db FILE]
+    deaddropd operator-token [--db FILE] [--public HOST:PORT]
 
     serve            Run the server (the default).
     fingerprint      Print the server's fingerprint, which phones use to recognise it.
@@ -21,7 +21,8 @@ USAGE:
 OPTIONS:
     --db FILE               Database file [default: deaddrop.db]
     --listen ADDRESS:PORT   Where to listen [default: 127.0.0.1:7443]
-    --public HOST:PORT      The address phones will use, to print ready-made links.
+    --public HOST:PORT      The address phones will use, to print ready-made links
+                            and a QR code to scan with the app.
     --tls-cert FILE         Certificate (PEM) from a certificate authority, with
     --tls-key FILE          its private key (PEM). Without these the server makes
                             its own key and certificate beside the database.
@@ -136,6 +137,13 @@ async fn main() -> ExitCode {
         return match store.run(|db| Ok(state::new_operator_token(db)?)).await {
             Ok(token) => {
                 print_operator_token(&token);
+                // With the public address, the whole link, ready to open or scan.
+                if let (Some(public), false) = (&args.public, args.no_tls) {
+                    match identity(&args) {
+                        Ok(identity) => print_link(public, &identity.fingerprint, Some(&token)),
+                        Err(problem) => eprintln!("error: {problem}"),
+                    }
+                }
                 ExitCode::SUCCESS
             }
             Err(_) => ExitCode::FAILURE,
@@ -165,11 +173,7 @@ async fn main() -> ExitCode {
         print_operator_token(token);
     }
     if let (Some(identity), Some(public)) = (&identity, &args.public) {
-        let link = format!("deaddrop://{public}/#fp={}", identity.fingerprint);
-        match &operator_token {
-            Some(token) => println!("Link for the operator's phone (holds the operator token):\n    {link}&t={token}"),
-            None => println!("Link to this server (an invite adds its own token):\n    {link}"),
-        }
+        print_link(public, &identity.fingerprint, operator_token.as_deref());
     }
     deaddropd::spawn_sweeper(state.clone(), Duration::from_secs(30));
 
@@ -180,9 +184,7 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let stop = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
+    let stop = stop_signal();
     let served = match &identity {
         Some(identity) => {
             println!("deaddropd listening on https://{}", args.listen);
@@ -201,6 +203,45 @@ async fn main() -> ExitCode {
         }
     };
     if served.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// Resolves when the server is asked to stop: Ctrl-C, or the signal that
+/// `systemctl stop` and `docker stop` send.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut terminate) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = terminate.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// Prints a link to this server, as text and as a QR code to scan straight off the screen.
+fn print_link(public: &str, fingerprint: &str, operator_token: Option<&str>) {
+    let link = match operator_token {
+        Some(token) => {
+            println!("Link for the operator's phone (holds the operator token):");
+            format!("deaddrop://{public}/#fp={fingerprint}&t={token}")
+        }
+        None => {
+            println!("Link to this server (an invite adds its own token):");
+            format!("deaddrop://{public}/#fp={fingerprint}")
+        }
+    };
+    println!("    {link}");
+    use qrcode::render::unicode::Dense1x2;
+    if let Ok(code) = qrcode::QrCode::new(link.as_bytes()) {
+        // Drawn for the usual terminal, light characters on a dark background: the
+        // code's light squares are the solid ones. The app reads it either way round.
+        let picture = code.render::<Dense1x2>().dark_color(Dense1x2::Light).light_color(Dense1x2::Dark).build();
+        println!("Or scan it in the app (Servers, Add a server, Scan a QR code):\n{picture}");
+    }
 }
 
 fn print_operator_token(token: &str) {

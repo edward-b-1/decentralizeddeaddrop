@@ -399,6 +399,113 @@ fn taking_a_server_off_a_phone_leaves_nothing_waiting_for_it() {
 }
 
 #[test]
+fn a_typed_address_gives_a_fingerprint_to_compare() {
+    let server = TestServer::start();
+    let port = server.address.port;
+    let found = deaddrop_tls::ask_fingerprint("127.0.0.1", port, Duration::from_secs(5));
+    assert_eq!(found.as_deref(), Some(server.address.fingerprint.as_str()));
+
+    // Nothing listening, and something that is not a Dead Drop server.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    assert_eq!(deaddrop_tls::ask_fingerprint("127.0.0.1", closed, Duration::from_secs(2)), None);
+    let plain = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let plain_port = plain.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::Write;
+        if let Ok((mut stream, _)) = plain.accept() {
+            let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\n\r\n");
+        }
+    });
+    assert_eq!(deaddrop_tls::ask_fingerprint("127.0.0.1", plain_port, Duration::from_secs(2)), None);
+}
+
+#[test]
+fn channels_and_people_can_be_renamed() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben"), (&mut cara, "Cara")]);
+
+    // The owner renames the channel, and herself.
+    anna.account.rename_channel(&anna.keys, &id, "Household").unwrap();
+    assert_eq!(ben.account.rename_channel(&ben.keys, &id, "Mine"), Err(ClientError::NotOwner));
+    let stored = &mut anna.stored;
+    let done = anna.account.set_my_name(&anna.keys, &id, "Mum", &mut |bytes| *stored = bytes.to_vec());
+    assert_eq!(done, Ok(true));
+    ben.sync();
+    let held = ben.account.channel(&id).unwrap();
+    assert_eq!((held.name.as_str(), held.name_of(anna.account.device())), ("Household", Some("Mum")));
+
+    // A member asks; the owner's phone makes the change when it collects.
+    let stored = &mut ben.stored;
+    let taken = ben.account.set_my_name(&ben.keys, &id, "cara", &mut |bytes| *stored = bytes.to_vec());
+    assert!(matches!(taken, Err(ClientError::Invalid(_))), "names are unique whatever the capitals");
+    let done = ben.account.set_my_name(&ben.keys, &id, "Benjamin", &mut |bytes| *stored = bytes.to_vec());
+    assert_eq!(done, Ok(false));
+    assert!(anna.sync().contains(&Event::ChannelsChanged));
+    assert!(Person::texts(&cara.sync()).is_empty(), "the request is not shown as a message");
+    assert_eq!(cara.account.channel(&id).unwrap().name_of(ben.account.device()), Some("Benjamin"));
+    ben.sync();
+
+    // Everyone still reads everyone.
+    assert_eq!(ben.send(&id, "new name, same me"), Ok(true));
+    assert_eq!(Person::texts(&anna.sync()), ["Benjamin: new name, same me"]);
+    assert_eq!(Person::texts(&cara.sync()), ["Benjamin: new name, same me"]);
+}
+
+#[test]
+fn safety_numbers_match_only_between_the_two_real_devices() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let ben = Person::invited_by(&mut anna);
+    let eve = Person::invited_by(&mut anna);
+    let annas = anna.account.safety_number(ben.account.device());
+    assert_eq!(annas, ben.account.safety_number(anna.account.device()));
+    // If the server had put Eve's device in Ben's place, Anna's number would differ from Ben's.
+    assert_ne!(anna.account.safety_number(eve.account.device()), ben.account.safety_number(anna.account.device()));
+}
+
+#[test]
+fn keys_that_expired_from_the_queue_are_asked_for_again() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+
+    // Anna's first message and the keys for it expire before Ben collects them.
+    assert_eq!(anna.send(&id, "one"), Ok(true));
+    let wipe = server.state.store.run(|db| Ok(db.execute("DELETE FROM messages", [])?));
+    server.runtime.block_on(wipe).unwrap();
+
+    // Her next message uses keys Ben never got. He cannot read it, and asks.
+    assert_eq!(anna.send(&id, "two"), Ok(true));
+    let events = ben.sync();
+    assert!(Person::texts(&events).is_empty());
+    assert!(events.iter().any(|event| matches!(event, Event::Unreadable { .. })));
+
+    // Anna's phone hears the request, and her next message carries the keys again.
+    anna.sync();
+    assert_eq!(anna.send(&id, "three"), Ok(true));
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: three"]);
+    assert_eq!(ben.send(&id, "got that one"), Ok(true));
+    assert_eq!(Person::texts(&anna.sync()), ["Ben: got that one"]);
+}
+
+#[test]
+fn the_operator_sees_devices_by_id_and_can_remove_one() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let ben = Person::invited_by(&mut anna);
+    let devices = anna.account.devices(&anna.keys).unwrap();
+    assert_eq!(devices.len(), 2);
+    assert!(devices.iter().any(|device| device.device == anna.account.device() && device.operator));
+    assert!(devices.iter().any(|device| device.device == ben.account.device() && !device.operator && !device.waiting));
+    anna.account.remove_device(&anna.keys, ben.account.device()).unwrap();
+    assert_eq!(anna.account.devices(&anna.keys).unwrap().len(), 1);
+}
+
+#[test]
 fn a_device_the_operator_removes_counts_as_having_left() {
     let server = TestServer::start();
     let mut anna = Person::operator(&server);

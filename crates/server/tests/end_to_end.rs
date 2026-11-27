@@ -131,7 +131,7 @@ impl Client {
             let body = unb64(message["body"].as_str().unwrap()).unwrap();
             match self.messenger.decrypt(channel, sender, &body) {
                 Ok(Incoming::Message(plaintext)) => texts.push(String::from_utf8(plaintext).unwrap()),
-                Ok(Incoming::KeysReceived) => {}
+                Ok(Incoming::KeysReceived | Incoming::KeysWanted) => {}
                 Err(error) => panic!("a queued message did not open: {error:?}"),
             }
             ids.push(message["id"].clone());

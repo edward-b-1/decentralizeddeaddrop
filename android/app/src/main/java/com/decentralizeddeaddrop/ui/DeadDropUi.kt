@@ -1,6 +1,16 @@
 package com.decentralizeddeaddrop.ui
 
+import android.Manifest
+import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.Switch
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.platform.LocalContext
+import com.decentralizeddeaddrop.service.ConnectionService
+import com.decentralizeddeaddrop.service.Prefs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
@@ -52,11 +63,16 @@ sealed interface Screen {
     data object NewChannel : Screen
     data class JoinChannel(val link: String) : Screen
     data class AddServer(val link: String) : Screen
+
+    /** An address typed by hand, whose fingerprint the person must check. */
+    data class CheckServer(val host: String, val port: Int, val token: String?, val password: String?, val label: String) : Screen
     data class Server(val slot: Int) : Screen
+    data class Devices(val slot: Int) : Screen
+    data class Safety(val key: String, val device: String) : Screen
 }
 
 @Composable
-fun DeadDropUi(openedLink: String?, onLinkHandled: () -> Unit) {
+fun DeadDropUi(openedLink: String?, onLinkHandled: () -> Unit, openedChannel: String?, onChannelHandled: () -> Unit) {
     val servers by Servers.servers.collectAsStateWithLifecycle()
     // Kept here so that coming back from another screen returns to the same tab.
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -65,11 +81,16 @@ fun DeadDropUi(openedLink: String?, onLinkHandled: () -> Unit) {
     val go: (Screen) -> Unit = { stack.add(it) }
     BackHandler(enabled = stack.size > 1, onBack = back)
 
-    // A link the app was opened with: a channel invite, or a server to add.
+    // A link that was opened, scanned or pasted: a channel invite, or a server to add.
+    // It takes the place of the screen that asked for it.
+    val openLink: (String) -> Unit = { text ->
+        if (stack.last() is Screen.AddServer || stack.last() is Screen.JoinChannel) stack.removeAt(stack.lastIndex)
+        val isChannelInvite = com.decentralizeddeaddrop.engine.readLink(text)?.channel != null
+        go(if (isChannelInvite) Screen.JoinChannel(text) else Screen.AddServer(text))
+    }
     LaunchedEffect(openedLink) {
         if (openedLink != null) {
-            val isChannelInvite = com.decentralizeddeaddrop.engine.readLink(openedLink)?.channel != null
-            go(if (isChannelInvite) Screen.JoinChannel(openedLink) else Screen.AddServer(openedLink))
+            openLink(openedLink)
             onLinkHandled()
         }
     }
@@ -77,22 +98,52 @@ fun DeadDropUi(openedLink: String?, onLinkHandled: () -> Unit) {
     val channel: (String) -> ChannelUi? = { key -> servers.flatMap { it.channels }.firstOrNull { it.key == key } }
     val server: (Int) -> ServerUi? = { slot -> servers.firstOrNull { it.slot == slot } }
 
+    // Opened from a message notification: go straight to that channel, once it is known.
+    val loaded by Servers.loaded.collectAsStateWithLifecycle()
+    LaunchedEffect(openedChannel, loaded, servers) {
+        if (openedChannel != null && loaded) {
+            if (channel(openedChannel) != null) {
+                stack.removeRange(1, stack.size)
+                tab = 0
+                go(Screen.Conversation(openedChannel))
+            }
+            onChannelHandled()
+        }
+    }
+
+    // Asked once, when there is first a server to hear from.
+    val context = LocalContext.current
+    val askToNotify = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(servers.isNotEmpty()) {
+        if (servers.isNotEmpty() && !Prefs.askedNotifications(context)) {
+            Prefs.setAskedNotifications(context)
+            askToNotify.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Box(Modifier.fillMaxSize().safeDrawingPadding()) {
-            when (val screen = stack.last()) {
+            val screen = stack.last()
+            // Each screen keeps its own state: a new link is a new screen, not the old one's fields.
+            key(screen) {
+            when (screen) {
                 Screen.Home -> Home(servers, tab, { tab = it }, go)
                 is Screen.Conversation -> channel(screen.key).orBack(back) { ConversationScreen(it, server(it.slot), back, go) }
                 is Screen.ChannelDetails -> channel(screen.key).orBack(back) { ChannelDetailsScreen(it, server(it.slot), back, go) { stack.removeRange(1, stack.size) } }
-                is Screen.Members -> channel(screen.key).orBack(back) { MembersScreen(it, back) }
+                is Screen.Members -> channel(screen.key).orBack(back) { MembersScreen(it, back, go) }
+                is Screen.Safety -> channel(screen.key).orBack(back) { SafetyScreen(it, screen.device, back) }
                 is Screen.JoinRequests -> channel(screen.key).orBack(back) { JoinRequestsScreen(it, back) }
                 is Screen.MaxAge -> channel(screen.key).orBack(back) { MaxAgeScreen(it, back) }
                 Screen.NewChannel -> NewChannelScreen(servers, back) { key ->
                     back()
                     go(Screen.Conversation(key))
                 }
-                is Screen.JoinChannel -> JoinChannelScreen(screen.link, back)
-                is Screen.AddServer -> AddServerScreen(screen.link, back)
-                is Screen.Server -> server(screen.slot).orBack(back) { ServerScreen(it, back) }
+                is Screen.JoinChannel -> JoinChannelScreen(screen.link, back, openLink)
+                is Screen.AddServer -> AddServerScreen(screen.link, back, go, openLink)
+                is Screen.CheckServer -> CheckServerScreen(screen, back) { stack.removeRange(1, stack.size) }
+                is Screen.Server -> server(screen.slot).orBack(back) { ServerScreen(it, back, go) }
+                is Screen.Devices -> server(screen.slot).orBack(back) { DevicesScreen(it, back) }
+            }
             }
         }
     }
@@ -242,7 +293,38 @@ private fun ServersTab(servers: List<ServerUi>, go: (Screen) -> Unit) {
 
 @Composable
 private fun SettingsTab() {
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+    val context = LocalContext.current
+    var background by remember { mutableStateOf(Prefs.background(context)) }
+    var showText by remember { mutableStateOf(Prefs.showText(context)) }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Heading("When the app is closed")
+        Item(
+            "Stay connected",
+            detail = "Messages arrive while the app is closed. A notification shows that it is connected.",
+            end = {
+                Switch(background, { on ->
+                    background = on
+                    Prefs.setBackground(context, on)
+                    ConnectionService.update(context)
+                })
+            },
+        )
+        Item(
+            "Show messages in notifications",
+            detail = if (showText) "Shows the channel, who wrote and what they wrote" else "Off: a notification says only that there is a new message",
+            end = {
+                Switch(showText, { on ->
+                    showText = on
+                    Prefs.setShowText(context, on)
+                })
+            },
+        )
+        Item(
+            "Battery",
+            detail = "Android may pause the app to save battery, which delays messages. Find Dead Drop in this list and allow it to run without restriction.",
+            onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } },
+        )
+        Note("Dead Drop uses no push service, so nothing about your messages passes through Google. The cost is a little battery for each server it stays connected to.")
         Heading("About")
         Item("Decentralized Dead Drop", detail = "Secure communication systems.")
         Item("Version", value = "0.1.0")

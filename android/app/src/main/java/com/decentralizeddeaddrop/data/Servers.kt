@@ -1,6 +1,7 @@
 package com.decentralizeddeaddrop.data
 
 import android.content.Context
+import com.decentralizeddeaddrop.engine.DeviceInfo
 import com.decentralizeddeaddrop.engine.EngineException
 import com.decentralizeddeaddrop.engine.JoinRequestInfo
 import com.decentralizeddeaddrop.engine.News
@@ -10,6 +11,7 @@ import com.decentralizeddeaddrop.engine.WaysInInfo
 import com.decentralizeddeaddrop.engine.readLink
 import com.decentralizeddeaddrop.keys.DeviceKeys
 import com.decentralizeddeaddrop.keys.Vault
+import com.decentralizeddeaddrop.service.Notifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
@@ -19,7 +21,15 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
-data class MemberUi(val device: String, val name: String, val hasLeft: Boolean)
+data class MemberUi(
+    val device: String,
+    val name: String,
+    val hasLeft: Boolean,
+    /** This phone's own entry. */
+    val isMe: Boolean,
+    /** The person holding this phone has compared safety numbers with this member. */
+    val verified: Boolean,
+)
 
 data class ChannelUi(
     val slot: Int,
@@ -36,6 +46,8 @@ data class ChannelUi(
     val unread: Int,
     /** For the owner: how many people are asking to join. */
     val asking: Int,
+    /** This phone's name in the channel. */
+    val myName: String,
 ) {
     val key: String get() = "$slot/$id"
 }
@@ -45,6 +57,8 @@ enum class Connection { Connected, Reconnecting, AwaitingApproval }
 data class ServerUi(
     val slot: Int,
     val label: String,
+    /** This phone's device ID on this server. */
+    val device: String,
     val address: String,
     val fingerprint: String,
     val operator: Boolean,
@@ -90,6 +104,9 @@ object Servers {
 
         /** Devices waiting for approval, if this phone runs the server. */
         @Volatile var waiting: List<String> = emptyList()
+
+        /** Devices whose safety number the person holding this phone has compared. */
+        val verified: MutableSet<String> = ConcurrentHashMap.newKeySet()
     }
 
     /** Writes the engine's state the moment the engine asks, before it goes on. */
@@ -104,6 +121,10 @@ object Servers {
 
     private val entries = ConcurrentHashMap<Int, Entry>()
     private lateinit var vault: Vault
+    private lateinit var app: Context
+
+    /** True once the servers stored on this phone have been read back in. */
+    val loaded = MutableStateFlow(false)
 
     /** The channel on screen right now, whose messages do not count as unread. */
     @Volatile var open: String? = null
@@ -113,6 +134,7 @@ object Servers {
 
     fun start(context: Context) {
         if (::vault.isInitialized) return
+        app = context.applicationContext
         vault = Vault(File(context.filesDir, "vault"))
         thread(name = "servers-start") {
             val registry = vault.read(REGISTRY)?.let { JSONArray(String(it)) } ?: JSONArray()
@@ -124,11 +146,15 @@ object Servers {
                 val store = Store(slot)
                 val session = runCatching { Session.restore(state, keys, store) }.getOrNull() ?: continue
                 val entry = Entry(slot, saved.getString("label"), keys, session, store)
+                saved.optJSONArray("verified")?.let { list ->
+                    for (at in 0 until list.length()) entry.verified += list.getString(at)
+                }
                 loadHistory(entry)
                 entries[slot] = entry
                 listen(entry)
             }
             publish()
+            loaded.value = true
         }
     }
 
@@ -143,9 +169,11 @@ object Servers {
             // state is read after them, not before.
             val address = session.address()
             val channels = session.channels()
+            val me = session.device()
             ServerUi(
                 slot = entry.slot,
                 label = entry.label,
+                device = me,
                 address = address,
                 fingerprint = session.fingerprint(),
                 operator = session.isOperator(),
@@ -160,7 +188,10 @@ object Servers {
                         owner = channel.owner,
                         ownedByMe = channel.ownedByMe,
                         maxAge = channel.maxAge.toLong(),
-                        members = channel.members.map { MemberUi(it.device, it.name, it.hasLeft) },
+                        members = channel.members.map {
+                            MemberUi(it.device, it.name, it.hasLeft, isMe = it.device == me, verified = it.device in entry.verified)
+                        },
+                        myName = channel.members.firstOrNull { it.device == me }?.name.orEmpty(),
                         lastLine = when {
                             last == null -> ""
                             last.unreadable -> "A message could not be read"
@@ -186,7 +217,8 @@ object Servers {
         val history = entry.history.getOrPut(channel) { History() }
         synchronized(history) {
             history.messages += message
-            if (!message.mine && open != "${entry.slot}/$channel") history.unread += 1
+            // Read at once only if its channel is on screen and the screen is being looked at.
+            if (!message.mine && (open != "${entry.slot}/$channel" || !Notifier.appVisible)) history.unread += 1
         }
         saveHistory(entry)
     }
@@ -195,6 +227,7 @@ object Servers {
         val (slot, channel) = key.split("/", limit = 2).let { it[0].toInt() to it[1] }
         val entry = entries[slot] ?: return
         val history = entry.history[channel] ?: return
+        Notifier.clear(app, key)
         if (history.unread == 0) return
         history.unread = 0
         thread {
@@ -243,7 +276,11 @@ object Servers {
     }
 
     private fun saveRegistry() {
-        val registry = JSONArray(entries.values.sortedBy { it.slot }.map { JSONObject().put("slot", it.slot).put("label", it.label) })
+        val registry = JSONArray(
+            entries.values.sortedBy { it.slot }.map {
+                JSONObject().put("slot", it.slot).put("label", it.label).put("verified", JSONArray(it.verified.sorted()))
+            },
+        )
         vault.write(REGISTRY, registry.toString().toByteArray())
     }
 
@@ -252,11 +289,15 @@ object Servers {
     private fun take(entry: Entry, news: List<News>) {
         for (item in news) {
             when (item) {
-                is News.Message -> record(
-                    entry,
-                    item.channel,
-                    MessageUi(mine = false, name = item.senderName ?: item.sender, text = item.text, sent = item.sent),
-                )
+                is News.Message -> {
+                    val name = item.senderName ?: item.sender
+                    record(entry, item.channel, MessageUi(mine = false, name = name, text = item.text, sent = item.sent))
+                    val key = "${entry.slot}/${item.channel}"
+                    if (open != key || !Notifier.appVisible) {
+                        val channel = servers.value.flatMap { it.channels }.firstOrNull { it.key == key }?.name ?: "A channel"
+                        Notifier.message(app, key, channel, name, item.text, entry.history[item.channel]?.unread ?: 1)
+                    }
+                }
                 is News.Unreadable -> record(
                     entry,
                     item.channel,
@@ -285,11 +326,15 @@ object Servers {
     /** Collects what is waiting, then waits for the server to say there is more. */
     private fun listen(entry: Entry) {
         thread(name = "server-${entry.slot}") {
+            // After a failure, wait longer each time before trying again (up to a minute),
+            // so that a server that is down, or a phone with no signal, costs little battery.
+            var pause = FIRST_RETRY_MS
             while (!entry.stopped) {
                 try {
                     take(entry, entry.session.sync())
                     lookAround(entry)
                     entry.connection = Connection.Connected
+                    pause = FIRST_RETRY_MS
                     publish()
                     while (!entry.stopped && !entry.session.waitForNews(25u)) {
                         // Quiet. Keep waiting.
@@ -301,7 +346,8 @@ object Servers {
                 } catch (failure: EngineException) {
                     entry.connection = Connection.Reconnecting
                     publish()
-                    Thread.sleep(5_000)
+                    Thread.sleep(pause)
+                    pause = (pause * 2).coerceAtMost(LONGEST_RETRY_MS)
                 }
             }
         }
@@ -353,6 +399,21 @@ object Servers {
         slot
     }
 
+    /**
+     * Asks whatever answers at an address typed by hand for its fingerprint. It means
+     * nothing until the person has compared it with what the server's operator gave them.
+     */
+    suspend fun askFingerprint(host: String, port: Int): String = withContext(Dispatchers.IO) {
+        com.decentralizeddeaddrop.engine.askFingerprint(host, port.toUShort())
+    }
+
+    /** Joins a server whose address was typed by hand, once the person has checked its fingerprint. */
+    suspend fun addTyped(host: String, port: Int, fingerprint: String, token: String?, password: String?, label: String): Int {
+        val link = com.decentralizeddeaddrop.engine.linkFromParts(host, port.toUShort(), fingerprint, token)
+            ?: throw IllegalArgumentException("That address or token cannot be used. Check what you typed.")
+        return addServer(link, password, label)
+    }
+
     /** The server a channel invite is for, if this phone is on it. */
     fun serverFor(link: String): Int? {
         val info = readLink(link) ?: return null
@@ -398,6 +459,21 @@ object Servers {
 
     suspend fun setMaxAge(slot: Int, channel: String, seconds: Long) = on(slot) { it.setMaxAge(channel, seconds.toULong()) }
 
+    suspend fun renameChannel(slot: Int, channel: String, name: String) = on(slot) { it.renameChannel(channel, name) }
+
+    /** True if the name has changed already; false if the channel's owner has been asked. */
+    suspend fun setMyName(slot: Int, channel: String, name: String): Boolean = on(slot) { it.setMyName(channel, name) }
+
+    suspend fun safetyNumber(slot: Int, device: String): String = on(slot) { it.safetyNumber(device) }
+
+    /** Records that the person holding this phone has, or has not, compared safety numbers with a device. */
+    suspend fun setVerified(slot: Int, device: String, verified: Boolean) = withContext(Dispatchers.IO) {
+        val entry = entry(slot)
+        if (verified) entry.verified += device else entry.verified -= device
+        saveRegistry()
+        publish()
+    }
+
     suspend fun leave(slot: Int, channel: String) = on(slot) {
         it.leave(channel)
         forgetHistory(slot, channel)
@@ -427,10 +503,19 @@ object Servers {
     suspend fun waysIn(slot: Int): WaysInInfo = on(slot) { it.waysIn() }
     suspend fun setWaysIn(slot: Int, open: Boolean, tokens: Boolean, approval: Boolean) = on(slot) { it.setWaysIn(open, tokens, approval) }
     suspend fun setServerPassword(slot: Int, password: String?) = on(slot) { it.setServerPassword(password) }
+    suspend fun serverLink(slot: Int): String = on(slot) { it.serverLink() }
+    suspend fun devices(slot: Int): List<DeviceInfo> = on(slot) { it.devices() }
+    suspend fun removeDevice(slot: Int, device: String) = on(slot) {
+        it.removeDevice(device)
+        entry(slot).waiting = it.waitingDevices()
+    }
+
     suspend fun approveDevice(slot: Int, device: String) = on(slot) {
         it.approveDevice(device)
         entry(slot).waiting = it.waitingDevices()
     }
 
     private const val REGISTRY = "servers"
+    private const val FIRST_RETRY_MS = 5_000L
+    private const val LONGEST_RETRY_MS = 60_000L
 }

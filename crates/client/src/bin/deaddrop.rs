@@ -30,6 +30,11 @@ USAGE:
     admit CHANNEL DEVICE                 Let a device in (owner)
     remove CHANNEL DEVICE                Remove a member (owner)
     leave CHANNEL
+    rename CHANNEL NEW-NAME              Rename a channel (owner)
+    name CHANNEL MY-NEW-NAME             Change this device's name in a channel
+    safety-number DEVICE                 The number to compare with that device's holder
+    devices                              Every device on the server (operator)
+    remove-device DEVICE                 Remove a device from the server (operator)
     leave-server                         Delete this device from the server, with the channels it owns
     send CHANNEL TEXT...
     receive                              Collect and print what is waiting
@@ -238,6 +243,33 @@ fn run() -> Result<(), String> {
             let channel = state.channel(&next("a channel")?)?;
             state.account.leave(&keys, &channel).map_err(fail)?;
         }
+        "rename" => {
+            let channel = state.channel(&next("a channel")?)?;
+            state.account.rename_channel(&keys, &channel, &next("a new name")?).map_err(fail)?;
+        }
+        "name" => {
+            let channel = state.channel(&next("a channel")?)?;
+            let name = next("a new name")?;
+            let path = state.path.clone();
+            let done = state
+                .account
+                .set_my_name(&keys, &channel, &name, &mut |bytes| {
+                    let _ = store(&path, &keys, bytes);
+                })
+                .map_err(fail)?;
+            if !done {
+                println!("Asked. The channel's owner's device makes the change when it next collects.");
+            }
+        }
+        "safety-number" => println!("{}", state.account.safety_number(&next("a device ID")?)),
+        "devices" => {
+            for device in state.account.devices(&keys).map_err(fail)? {
+                let notes = [(device.operator, " (runs the server)"), (device.waiting, " (waiting for approval)")];
+                let notes: String = notes.iter().filter(|(shown, _)| *shown).map(|(_, note)| *note).collect();
+                println!("{}{notes}", device.device);
+            }
+        }
+        "remove-device" => state.account.remove_device(&keys, &next("a device ID")?).map_err(fail)?,
         "leave-server" => {
             state.account.leave_server(&keys).map_err(fail)?;
             println!("This device is deleted from the server. The state file is of no further use.");

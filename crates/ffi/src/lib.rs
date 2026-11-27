@@ -129,6 +129,24 @@ pub fn link_from_parts(host: String, port: u16, fingerprint: String, token: Opti
     Link::parse(&text).map(|link| link.to_string())
 }
 
+/// Asks whatever answers at an address typed by hand for its fingerprint (in groups of
+/// four), for the person to compare with what the server's operator gave them. It
+/// proves nothing until they have: see `deaddrop_tls::ask_fingerprint`.
+#[uniffi::export]
+pub fn ask_fingerprint(host: String, port: u16) -> Outcome<String> {
+    let found = deaddrop_tls::ask_fingerprint(&host, port, Duration::from_secs(10));
+    Ok(deaddrop_tls::display(&found.ok_or(ClientError::Unreachable)?))
+}
+
+/// A device on a server, as the person who runs it sees it.
+#[derive(uniffi::Record)]
+pub struct DeviceInfo {
+    pub device: String,
+    /// Registered but not yet approved.
+    pub waiting: bool,
+    pub operator: bool,
+}
+
 #[derive(uniffi::Record)]
 pub struct Member {
     pub device: String,
@@ -289,6 +307,18 @@ impl Session {
             .collect()
     }
 
+    /// A link holding only this server's address and fingerprint: enough to add the
+    /// server where the way in is a password, approval, or nothing.
+    pub fn server_link(&self) -> String {
+        let server = self.account().address().clone();
+        Link { server, server_token: None, channel: None }.to_string()
+    }
+
+    /// The safety number this device shares with another: thirty digits in six groups.
+    pub fn safety_number(&self, device: String) -> String {
+        self.account().safety_number(&device)
+    }
+
     /// Channels this device has asked to join and is waiting to be let into.
     pub fn asked(&self) -> Vec<String> {
         self.account().asked().map(str::to_owned).collect()
@@ -341,6 +371,21 @@ impl Session {
 
     pub fn delete_channel(&self, channel: String) -> Outcome<()> {
         self.change(|account, keys| account.delete_channel(keys, &channel))
+    }
+
+    /// Renames a channel. Owner only.
+    pub fn rename_channel(&self, channel: String, name: String) -> Outcome<()> {
+        self.change(|account, keys| account.rename_channel(keys, &channel, &name))
+    }
+
+    /// Changes this device's name in a channel. True if it is done already; false if
+    /// the request has gone to the channel's owner, whose phone makes the change.
+    pub fn set_my_name(&self, channel: String, name: String) -> Outcome<bool> {
+        let mut account = self.account();
+        let store = &self.store;
+        let done = account.set_my_name(&self.keys, &channel, &name, &mut |bytes| store.save(bytes.to_vec()));
+        store.save(account.to_bytes());
+        Ok(done?)
     }
 
     /// Takes this device off the server, with its memberships, anything waiting for it
@@ -408,5 +453,19 @@ impl Session {
 
     pub fn approve_device(&self, device: String) -> Outcome<()> {
         self.change(|account, keys| account.approve_device(keys, &device))
+    }
+
+    /// Every device on the server.
+    pub fn devices(&self) -> Outcome<Vec<DeviceInfo>> {
+        let devices = self.change(|account, keys| account.devices(keys))?;
+        Ok(devices
+            .into_iter()
+            .map(|device| DeviceInfo { device: device.device, waiting: device.waiting, operator: device.operator })
+            .collect())
+    }
+
+    /// Removes a device from the server altogether, with the channels it owns.
+    pub fn remove_device(&self, device: String) -> Outcome<()> {
+        self.change(|account, keys| account.remove_device(keys, &device))
     }
 }

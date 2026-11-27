@@ -17,7 +17,7 @@ pub mod live;
 use deaddrop_core::encoding::b64;
 use deaddrop_core::soft::SoftDevice;
 
-pub use account::{Account, Channel, Event, JoinRequest, Save, WayIn, WaysIn};
+pub use account::{Account, Channel, Event, JoinRequest, Save, ServerDevice, WayIn, WaysIn};
 pub use link::{ChannelInvite, Link, ServerAddress};
 pub use live::{Live, Wake};
 
@@ -81,6 +81,8 @@ pub enum ClientError {
     Crypto(deaddrop_crypto::Error),
     /// Saved state that this version cannot read.
     BadState,
+    /// What was asked for cannot be done; the text says why, for the person asking.
+    Invalid(&'static str),
 }
 
 impl From<deaddrop_crypto::Error> for ClientError {
@@ -105,6 +107,7 @@ impl std::fmt::Display for ClientError {
             ClientError::WrongServer => f.write_str("that link is for a different server"),
             ClientError::Crypto(error) => write!(f, "encryption: {error:?}"),
             ClientError::BadState => f.write_str("the saved state cannot be read"),
+            ClientError::Invalid(why) => f.write_str(why),
         }
     }
 }

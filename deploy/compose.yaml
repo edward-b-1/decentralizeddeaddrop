@@ -1,0 +1,37 @@
+# The Dead Drop server on one machine. From this folder:
+#
+#   cp env.example .env        and set DEADDROP_PUBLIC in it
+#   docker compose up -d --build
+#   docker compose logs --no-log-prefix deaddropd      (the first start prints the operator's link and QR code)
+#
+# See docs/DEPLOYMENT.md.
+services:
+  deaddropd:
+    build: ..
+    restart: unless-stopped
+    command:
+      - serve
+      - --db
+      - /data/deaddrop.db
+      - --listen
+      - 0.0.0.0:7443
+      - --public
+      - ${DEADDROP_PUBLIC:?Set DEADDROP_PUBLIC in .env to the address phones will use, for example 203.0.113.7:7443}
+    ports:
+      - "${DEADDROP_PORT:-7443}:7443"
+    volumes:
+      - deaddrop-data:/data
+    # The server needs nothing from the machine but its data folder and its port.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # The log holds no identifiers except the addresses that got a server password wrong.
+    # Keep little of it.
+    logging:
+      driver: json-file
+      options:
+        max-size: "1m"
+        max-file: "3"
+
+volumes:
+  deaddrop-data:

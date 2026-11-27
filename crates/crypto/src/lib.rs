@@ -100,6 +100,9 @@ pub enum Incoming {
     Message(Vec<u8>),
     /// Keys from another member arrived and were stored; nothing to show.
     KeysReceived,
+    /// Another member asked for this device's keys for the channel again
+    /// ([`Messenger::ask_again`]). They go with the next message; nothing to show.
+    KeysWanted,
 }
 
 /// Prekeys to upload, made by [`Messenger::new_prekeys`].
@@ -145,6 +148,9 @@ struct Pairwise {
     roster: u64,
     /// The sender's sending ratchet for the channel, at its current position.
     key: String,
+    /// Set (with no key) to ask the other device for *its* sending ratchet again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    ask: bool,
 }
 
 pub struct Messenger {
@@ -279,6 +285,35 @@ impl Messenger {
         Ok(())
     }
 
+    /// Asks `sender` to hand over their sending ratchet for `channel` again, for when a
+    /// message of theirs arrived that this device has no keys for: the hand-over expired
+    /// from the queue, or the private session it came over has gone out of step. Returns
+    /// what to send to that one device.
+    ///
+    /// It goes over the newest private session with them, so start a new one first
+    /// ([`Messenger::start_session`]) if the old one may be the problem. What was missed
+    /// stays missed: the ratchet comes back at the position it has reached by then.
+    pub fn ask_again(&mut self, channel: &str, sender: &str) -> Result<Vec<u8>, Error> {
+        let roster = self.channels.get(channel).ok_or(Error::UnknownChannel)?.roster_version;
+        let ask = Pairwise {
+            from: self.device.clone(),
+            to: sender.to_owned(),
+            channel: channel.to_owned(),
+            roster,
+            key: String::new(),
+            ask: true,
+        };
+        let peer = self.peers.get_mut(sender).ok_or_else(|| Error::UnknownPeer(sender.to_owned()))?;
+        let session = peer.sessions.last_mut().ok_or_else(|| Error::NoSession(vec![sender.to_owned()]))?;
+        let sealed = session
+            .encrypt(serde_json::to_vec(&ask).expect("plain data"))
+            .map_err(|_| Error::NoSession(vec![sender.to_owned()]))?;
+        let (kind, bytes) = sealed.to_parts();
+        let mut body = vec![PAIRWISE, kind as u8];
+        body.extend(bytes);
+        Ok(body)
+    }
+
     /// Encrypts `plaintext` for everyone now in the channel.
     ///
     /// The first message after the roster changes (and every [`ROTATE_AFTER_MESSAGES`]
@@ -326,6 +361,7 @@ impl Messenger {
                 channel: channel.to_owned(),
                 roster: outbound.roster_version,
                 key: outbound.session.session_key().to_base64(),
+                ask: false,
             };
             let peer = self.peers.get_mut(member).expect("checked above");
             let session = peer.sessions.last_mut().expect("checked above");
@@ -397,6 +433,14 @@ impl Messenger {
         let share: Pairwise = serde_json::from_slice(&plaintext).map_err(|_| Error::Malformed)?;
         if share.from != sender || share.to != self.device || share.channel != channel {
             return Err(Error::CannotOpen);
+        }
+        if share.ask {
+            // Hand this device's ratchet to them again with the next message. Whether
+            // they are (still) a member is decided there, as for every hand-over.
+            if let Some(outbound) = self.channels.get_mut(channel).and_then(|state| state.outbound.as_mut()) {
+                outbound.shared_with.remove(sender);
+            }
+            return Ok(Incoming::KeysWanted);
         }
         let key = SessionKey::from_base64(&share.key).map_err(|_| Error::Malformed)?;
         let session = InboundGroupSession::new(&key, megolm_config());

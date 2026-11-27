@@ -59,7 +59,7 @@ fn open(all: &mut [Messenger], from: usize, to: usize, body: &[u8]) -> Result<St
     let sender = all[from].device().to_owned();
     match all[to].decrypt(CHANNEL, &sender, body)? {
         Incoming::Message(plaintext) => Ok(String::from_utf8(plaintext).unwrap()),
-        Incoming::KeysReceived => panic!("expected a message"),
+        Incoming::KeysReceived | Incoming::KeysWanted => panic!("expected a message"),
     }
 }
 
@@ -336,6 +336,44 @@ fn junk_is_refused() {
     for junk in [&b""[..], b"\x00", b"\x01", b"\x02", b"\x03hello", b"\x01\x00garbage", b"\x02\x05ab"] {
         assert!(all[1].decrypt(CHANNEL, "anna", junk).is_err(), "{junk:?}");
     }
+}
+
+#[test]
+fn a_member_who_missed_a_hand_over_can_ask_for_it_again() {
+    let mut all = group(&["anna", "ben"]);
+    // Anna's hand-over to Ben never arrives.
+    let one = send(&mut all, 0, "one");
+    assert_eq!(one.shares.len(), 1);
+    assert_eq!(open(&mut all, 0, 1, &one.message), Err(Error::UnknownSession));
+
+    // Ben starts a new private session with Anna and asks over it.
+    let prekey = all[0].new_prekeys(1, false).one_time.remove(0);
+    all[1].start_session("anna", &prekey).unwrap();
+    let ask = all[1].ask_again(CHANNEL, "anna").unwrap();
+    assert_eq!(all[0].decrypt(CHANNEL, "ben", &ask), Ok(Incoming::KeysWanted));
+
+    // Anna's next message hands her ratchet over again, where it now stands.
+    let two = send(&mut all, 0, "two");
+    assert_eq!(two.shares.len(), 1);
+    deliver_shares(&mut all, 0, &two);
+    assert_eq!(open(&mut all, 0, 1, &two.message).as_deref(), Ok("two"));
+    assert_eq!(open(&mut all, 0, 1, &one.message), Err(Error::AlreadyOpened), "what was missed stays missed");
+    assert!(send(&mut all, 0, "three").shares.is_empty());
+}
+
+#[test]
+fn asking_for_keys_gets_someone_outside_the_channel_nothing() {
+    let mut all = group(&["anna", "ben", "cara"]);
+    say(&mut all, 0, "to all three");
+    set_roster(&mut all, 2, &["anna", "ben"]);
+    say(&mut all[..2], 0, "to ben alone");
+
+    let prekey = all[0].new_prekeys(1, false).one_time.remove(0);
+    all[2].start_session("anna", &prekey).unwrap();
+    let ask = all[2].ask_again(CHANNEL, "anna").unwrap();
+    assert_eq!(all[0].decrypt(CHANNEL, "cara", &ask), Ok(Incoming::KeysWanted));
+    let next = send(&mut all[..2], 0, "still to ben alone");
+    assert!(next.shares.is_empty(), "nothing is handed to cara");
 }
 
 #[test]
