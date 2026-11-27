@@ -3,6 +3,7 @@ name = "deaddrop-tls"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license.workspace = true
 
 [dependencies]
 deaddrop-core = { version = "0.1.0", path = "../core" }

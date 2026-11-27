@@ -48,3 +48,17 @@ cargo ndk -t arm64-v8a -t x86_64 --platform 31 build -p deaddrop-core -p deaddro
 
 `arm64-v8a` is for phones and `x86_64` for the emulator. `cargo ndk ... test --no-run`
 builds the tests as Android programs, which can be pushed to a device with `adb` and run.
+
+## Licence
+
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). You may use, change and share this
+software for any noncommercial purpose. That covers personal use, and use by charities,
+schools, public research bodies and government. Commercial use needs the author's
+permission.
+
+The source is public so that anyone can check it, but this is not an open-source
+licence: describe the project as "source available".
+
+Required Notice: Copyright 2026 the author of Decentralized Dead Drop (https://decentralizeddeaddrop.com)
+
+The libraries it is built on keep their own licences, mostly MIT and Apache 2.0.

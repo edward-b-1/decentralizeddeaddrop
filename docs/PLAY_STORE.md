@@ -63,7 +63,7 @@ Invite links use the app's own `deaddrop://` scheme and never a website, so ther
 > MADE TO BE CHECKED
 > • Invite people with a QR code or a link.
 > • Compare safety numbers to be sure you are talking to the right person.
-> • The app and the server are open source.
+> • The source code of the app and the server is public, so anyone can check it.
 >
 > Decentralized Dead Drop needs an internet connection and a server to connect to. This is an early version and has had no independent security review.
 
