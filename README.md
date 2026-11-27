@@ -1,3 +1,5 @@
+<img src="site/icon.svg" width="96" alt="The Decentralized Dead Drop icon: a message bubble folded like a sealed envelope, in front of a second bubble">
+
 # Decentralized Dead Drop
 
 *Secure communication systems.*
