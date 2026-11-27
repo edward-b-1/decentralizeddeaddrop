@@ -88,9 +88,19 @@ pub struct JoinRequest {
     pub name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Something [`Account::sync`] has to tell the app.
+///
+/// A message, readable or not, carries an `id`: a random identifier this device gives
+/// it when it opens it. The engine keeps every message it has opened and goes on
+/// handing it over, under the same ID, until [`Account::stored`] says the app has it.
+/// An app that keeps the ID with each message it stores never shows a message twice.
+///
+/// The ID is random, not a count, so that it depends on nothing the engine remembers:
+/// an ID can never be given to a second message, whatever becomes of the saved state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Event {
     Message {
+        id: String,
         channel: String,
         /// Device ID of the sender, as proved by the encryption (not the server's word).
         sender: String,
@@ -102,7 +112,7 @@ pub enum Event {
     },
     /// A message arrived that cannot be opened, for example because its keys expired
     /// from the queue before this device collected them.
-    Unreadable { channel: String, sender: String },
+    Unreadable { id: String, channel: String, sender: String },
     /// The list of channels, or something about one of them, has changed.
     ChannelsChanged,
 }
@@ -125,6 +135,16 @@ struct Outgoing {
     body: String,
 }
 
+/// A message this device has opened and the app has not yet said it has stored. Kept
+/// in the saved state beside the keys that opened it: opening a message destroys the
+/// key for it and the server wipes its copy, so from then on this is the only one.
+#[derive(Clone, Serialize, Deserialize)]
+struct Kept {
+    /// The server's ID for the queued message this came from.
+    queued: String,
+    event: Event,
+}
+
 struct Session {
     token: String,
     expires: i64,
@@ -142,6 +162,8 @@ pub struct Account {
     channels: BTreeMap<String, Channel>,
     asked: Vec<Asked>,
     outbox: VecDeque<Outgoing>,
+    /// Messages opened and not yet stored by the app, oldest first.
+    inbox: VecDeque<Kept>,
     /// When each (channel, member) was last asked to hand their keys over again.
     asked_keys: HashMap<(String, String), i64>,
 }
@@ -158,6 +180,9 @@ struct Saved {
     channels: Vec<Channel>,
     asked: Vec<Asked>,
     outbox: Vec<Outgoing>,
+    // Absent from state saved by versions up to 0.1.1.
+    #[serde(default)]
+    inbox: Vec<Kept>,
 }
 
 /// The server's rule for names: some characters, no spaces at the ends, nothing unprintable.
@@ -223,6 +248,7 @@ impl Account {
             channels: BTreeMap::new(),
             asked: Vec::new(),
             outbox: VecDeque::new(),
+            inbox: VecDeque::new(),
             asked_keys: HashMap::new(),
         };
         if reply["status"] == "active" {
@@ -265,6 +291,22 @@ impl Account {
     /// Sealed messages made but not yet posted (the server could not be reached).
     pub fn unsent(&self) -> usize {
         self.outbox.len()
+    }
+
+    /// Every message opened and not yet [`Account::stored`], oldest first. A sync that
+    /// succeeds returns these too; this is for after one that failed part of the way,
+    /// which may have opened messages before it did.
+    pub fn received(&self) -> Vec<Event> {
+        self.inbox.iter().map(|kept| kept.event.clone()).collect()
+    }
+
+    /// The app has stored the messages with these IDs, somewhere that survives a crash.
+    /// The engine forgets them. Save the state afterwards.
+    pub fn stored(&mut self, ids: &[String]) {
+        self.inbox.retain(|kept| match &kept.event {
+            Event::Message { id, .. } | Event::Unreadable { id, .. } => !ids.contains(id),
+            Event::ChannelsChanged => false,
+        });
     }
 
     // ------------------------------------------------------------------ signing in
@@ -669,6 +711,10 @@ impl Account {
         self.channels.remove(channel);
         self.messenger.forget_channel(channel);
         self.outbox.retain(|queued| queued.channel != channel);
+        self.inbox.retain(|kept| match &kept.event {
+            Event::Message { channel: of, .. } | Event::Unreadable { channel: of, .. } => of != channel,
+            Event::ChannelsChanged => false,
+        });
     }
 
     // ------------------------------------------------------------------ checking what the server says
@@ -886,9 +932,14 @@ impl Account {
     /// Does everything due: finishes setting up, posts anything queued, brings channels
     /// up to date, and collects and opens the queue.
     ///
-    /// `save` is called before each batch of messages is acknowledged, because opening
-    /// a message destroys the keys for it: the new state must be stored before the
-    /// server is told it may wipe its copy.
+    /// Returns what is new, and with it every message opened earlier that the app has
+    /// not yet said it has stored: store them, then call [`Account::stored`].
+    ///
+    /// Opening a message destroys the key for it, and acknowledging it lets the server
+    /// wipe its copy. So an opened message goes straight into this account's state, and
+    /// `save` is called with that state (the new keys and the messages together) before
+    /// each batch is acknowledged. Whatever fails after that, here or in the app, the
+    /// message is still held: [`Account::received`] hands it over again.
     pub fn sync(&mut self, keys: &dyn DeviceKeys, save: Save) -> Result<Vec<Event>, ClientError> {
         if !self.keys_published {
             self.publish_keys(keys)?;
@@ -939,17 +990,21 @@ impl Account {
                         let Ok(payload) = serde_json::from_slice::<Value>(&plaintext) else { continue };
                         // Kinds of message this version does not know are skipped.
                         match payload["t"].as_str() {
-                            Some("text") => events.push(Event::Message {
-                                channel: channel.to_owned(),
-                                sender: sender.to_owned(),
-                                sender_name: self
-                                    .channels
-                                    .get(channel)
-                                    .and_then(|c| c.name_of(sender))
-                                    .map(str::to_owned),
-                                text: payload["body"].as_str().unwrap_or_default().to_owned(),
-                                sent: payload["at"].as_i64().unwrap_or(0),
-                            }),
+                            Some("text") => {
+                                let event = Event::Message {
+                                    id: random_id(),
+                                    channel: channel.to_owned(),
+                                    sender: sender.to_owned(),
+                                    sender_name: self
+                                        .channels
+                                        .get(channel)
+                                        .and_then(|c| c.name_of(sender))
+                                        .map(str::to_owned),
+                                    text: payload["body"].as_str().unwrap_or_default().to_owned(),
+                                    sent: payload["at"].as_i64().unwrap_or(0),
+                                };
+                                self.inbox.push_back(Kept { queued: id.to_owned(), event });
+                            }
                             // A member asking the owner for a new name in the channel.
                             Some("name") => {
                                 if let Some(name) = payload["name"].as_str() {
@@ -960,7 +1015,8 @@ impl Account {
                         }
                     }
                     Ok(Incoming::KeysReceived | Incoming::KeysWanted) => {}
-                    // Delivered twice (acknowledging was interrupted last time): already shown.
+                    // Delivered twice (acknowledging was interrupted last time): it was
+                    // opened then, and is in the inbox or already with the app.
                     Err(CryptoError::AlreadyOpened) => {}
                     Err(error) => {
                         // The sender's keys never arrived, or the private session they came
@@ -970,13 +1026,21 @@ impl Account {
                         if keys_lost {
                             lost.push((channel.to_owned(), sender.to_owned()));
                         }
-                        // Only a message that cannot be read is worth telling the person about.
-                        if body.first() == Some(&2) {
-                            events.push(Event::Unreadable { channel: channel.to_owned(), sender: sender.to_owned() });
+                        // Only a message that cannot be read is worth telling the person about,
+                        // and only once: it comes again if acknowledging it failed last time.
+                        if body.first() == Some(&2) && !self.inbox.iter().any(|kept| kept.queued == id) {
+                            let event = Event::Unreadable {
+                                id: random_id(),
+                                channel: channel.to_owned(),
+                                sender: sender.to_owned(),
+                            };
+                            self.inbox.push_back(Kept { queued: id.to_owned(), event });
                         }
                     }
                 }
             }
+            // The new keys and the opened messages are stored together, before the
+            // server is told it may wipe its copies.
             save(&self.to_bytes());
             self.request(keys, Method::POST, "/v1/queue/ack", Some(json!({ "ids": ids })))?;
             for (channel, device, name) in renames {
@@ -1002,6 +1066,7 @@ impl Account {
             self.flush(keys, save)?;
         }
         self.top_up_prekeys(keys, save)?;
+        events.extend(self.received());
         Ok(events)
     }
 
@@ -1057,6 +1122,7 @@ impl Account {
             channels: self.channels.values().cloned().collect(),
             asked: self.asked.clone(),
             outbox: self.outbox.iter().cloned().collect(),
+            inbox: self.inbox.iter().cloned().collect(),
         };
         serde_json::to_vec(&saved).expect("plain data")
     }
@@ -1080,6 +1146,7 @@ impl Account {
             channels: saved.channels.into_iter().map(|channel| (channel.id.clone(), channel)).collect(),
             asked: saved.asked,
             outbox: saved.outbox.into_iter().collect(),
+            inbox: saved.inbox.into_iter().collect(),
             asked_keys: HashMap::new(),
         })
     }

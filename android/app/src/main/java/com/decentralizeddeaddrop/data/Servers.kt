@@ -225,16 +225,21 @@ object Servers {
         }.toSet()
     }
 
-    private fun record(entry: Entry, channel: String, message: MessageUi) {
+    /**
+     * Stores a message and shows it. [received] is the engine's ID for a message that
+     * came from the server. False means that message was stored already: the engine hands
+     * one over again if the app stopped before saying it had it.
+     */
+    private fun record(entry: Entry, channel: String, message: MessageUi, received: String? = null): Boolean {
         val history = entry.history.getOrPut(channel) { History() }
         synchronized(history) {
-            history.messages += db.add(entry.slot, channel, message)
             // Read at once only if its channel is on screen and the screen is being looked at.
-            if (!message.mine && (open != "${entry.slot}/$channel" || !Notifier.appVisible)) {
-                history.unread += 1
-                db.setUnread(entry.slot, channel, history.unread)
-            }
+            val unread = !message.mine && (open != "${entry.slot}/$channel" || !Notifier.appVisible)
+            val count = if (unread) history.unread + 1 else null
+            history.messages += db.add(entry.slot, channel, message, received, count) ?: return false
+            if (count != null) history.unread = count
         }
+        return true
     }
 
     fun markRead(key: String) {
@@ -287,26 +292,37 @@ object Servers {
 
     // ------------------------------------------------------------------ collecting messages
 
+    /**
+     * Stores what the engine has collected, then tells the engine so.
+     *
+     * By the time a message gets here the server has wiped its copy and the key that
+     * opened it is gone: the engine's saved state holds the only one. The engine keeps
+     * it, and hands it over again, until it is told the message is in the database. If
+     * storing fails, it is not told, and the message comes again with the next collection.
+     */
     private fun take(entry: Entry, news: List<News>) {
+        val stored = ArrayList<String>()
         for (item in news) {
             when (item) {
                 is News.Message -> {
                     val name = item.senderName ?: item.sender
-                    record(entry, item.channel, MessageUi(mine = false, name = name, text = item.text, sent = item.sent))
+                    val message = MessageUi(mine = false, name = name, text = item.text, sent = item.sent)
                     val key = "${entry.slot}/${item.channel}"
-                    if (open != key || !Notifier.appVisible) {
+                    if (record(entry, item.channel, message, item.id) && (open != key || !Notifier.appVisible)) {
                         val channel = servers.value.flatMap { it.channels }.firstOrNull { it.key == key }?.name ?: "A channel"
                         Notifier.message(app, key, channel, name, item.text, entry.history[item.channel]?.unread ?: 1)
                     }
+                    stored += item.id
                 }
-                is News.Unreadable -> record(
-                    entry,
-                    item.channel,
-                    MessageUi(mine = false, name = "", text = "", sent = System.currentTimeMillis() / 1000, unreadable = true),
-                )
+                is News.Unreadable -> {
+                    val message = MessageUi(mine = false, name = "", text = "", sent = System.currentTimeMillis() / 1000, unreadable = true)
+                    record(entry, item.channel, message, item.id)
+                    stored += item.id
+                }
                 is News.ChannelsChanged -> {}
             }
         }
+        if (stored.isNotEmpty()) entry.session.stored(stored)
     }
 
     /**
@@ -344,9 +360,16 @@ object Servers {
                     entry.connection = Connection.AwaitingApproval
                     publish()
                     Thread.sleep(10_000)
-                } catch (failure: EngineException) {
+                } catch (failure: Exception) {
+                    // Any failure, not only the engine's: if this thread ended (on the
+                    // message database refusing a write, say), nothing more would be
+                    // collected until the app was started again.
+                    //
+                    // Messages may have been opened before whatever failed. The engine
+                    // holds them; store and show them now, not after the next success.
+                    runCatching { take(entry, entry.session.received()) }
                     entry.connection = Connection.Reconnecting
-                    publish()
+                    runCatching { publish() }
                     Thread.sleep(pause)
                     pause = (pause * 2).coerceAtMost(LONGEST_RETRY_MS)
                 }

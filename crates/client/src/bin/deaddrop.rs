@@ -108,18 +108,27 @@ impl State {
         })
     }
 
-    fn print(&self, events: &[Event]) {
+    /// Prints what a sync returned. Printing is all this client does with a message,
+    /// so it then tells the engine they are dealt with.
+    fn print(&mut self, events: &[Event]) {
+        let mut printed = Vec::new();
         for event in events {
             let name = |id: &str| self.account.channel(id).map_or(id.to_owned(), |channel| channel.name.clone());
             match event {
-                Event::Message { channel, sender, sender_name, text, .. } => {
+                Event::Message { id, channel, sender, sender_name, text, .. } => {
                     println!("[{}] {}: {text}", name(channel), sender_name.as_deref().unwrap_or(sender));
+                    printed.push(id.clone());
                 }
-                Event::Unreadable { channel, sender } => {
+                Event::Unreadable { id, channel, sender } => {
                     println!("[{}] (a message from {sender} could not be read)", name(channel));
+                    printed.push(id.clone());
                 }
                 Event::ChannelsChanged => println!("(your channels have changed: see `status`)"),
             }
+        }
+        if !printed.is_empty() {
+            self.account.stored(&printed);
+            let _ = self.save();
         }
     }
 }

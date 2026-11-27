@@ -18,6 +18,11 @@ import java.security.SecureRandom
  * Each message is a row, so adding one writes one row, a conversation can be read a page
  * at a time, and a single message can be deleted. Deleted rows are overwritten
  * (`secure_delete`), not just unlinked.
+ *
+ * A message from a server is the only copy there is once the phone has collected it, and
+ * the engine holds it until it is told the message is stored here. So a write is on the
+ * disk before [add] returns (`synchronous = FULL`), and each such message is stored with
+ * the engine's ID for it (`received`), which is how one handed over twice is stored once.
  */
 class MessageDb(directory: File, vault: Vault) {
     private val db: SQLiteDatabase
@@ -46,23 +51,38 @@ class MessageDb(directory: File, vault: Vault) {
         val opened = SQLiteDatabase.openOrCreateDatabase(file, password, null, null, null)
         try {
             opened.rawQuery("PRAGMA secure_delete = ON", null).use { it.moveToFirst() }
+            opened.rawQuery("PRAGMA synchronous = FULL", null).use { it.moveToFirst() }
             if (opened.version == 0) {
                 opened.beginTransaction()
                 try {
                     opened.execSQL(
                         "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, slot INTEGER NOT NULL, channel TEXT NOT NULL, " +
-                            "mine INTEGER NOT NULL, name TEXT NOT NULL, body TEXT NOT NULL, sent INTEGER NOT NULL, unreadable INTEGER NOT NULL)",
+                            "mine INTEGER NOT NULL, name TEXT NOT NULL, body TEXT NOT NULL, sent INTEGER NOT NULL, unreadable INTEGER NOT NULL, " +
+                            "received TEXT)",
                     )
                     opened.execSQL("CREATE INDEX messages_by_channel ON messages (slot, channel, id)")
+                    opened.execSQL(RECEIVED_INDEX)
                     opened.execSQL("CREATE TABLE unread (slot INTEGER NOT NULL, channel TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (slot, channel))")
-                    opened.version = 1
+                    opened.version = VERSION
                     opened.setTransactionSuccessful()
                 } finally {
                     opened.endTransaction()
                 }
             } else {
-                // Proves the key fits: a wrong key fails here, not on the pragma above.
+                // Proves the key fits: a wrong key fails here, not on the pragmas above.
                 opened.rawQuery("SELECT count(*) FROM messages", null).use { it.moveToFirst() }
+            }
+            if (opened.version == 1) {
+                // Version 0.1.1 did not keep the engine's ID for a message.
+                opened.beginTransaction()
+                try {
+                    opened.execSQL("ALTER TABLE messages ADD COLUMN received TEXT")
+                    opened.execSQL(RECEIVED_INDEX)
+                    opened.version = VERSION
+                    opened.setTransactionSuccessful()
+                } finally {
+                    opened.endTransaction()
+                }
             }
         } catch (failure: Throwable) {
             opened.close()
@@ -75,11 +95,34 @@ class MessageDb(directory: File, vault: Vault) {
         for (suffix in listOf("", "-journal", "-wal", "-shm")) File(file.path + suffix).delete()
     }
 
-    /** Stores a message and returns it with its place in the history. */
+    /**
+     * Stores a message and returns it with its place in the history.
+     *
+     * [received] is the engine's ID for a message that came from a server, and is
+     * left out for one written on this phone. Null comes back if that message is here
+     * already, and nothing is stored.
+     *
+     * [unread], if given, becomes the channel's count of unread messages in the same
+     * step: the message and the count are both stored, or neither is.
+     */
     @Synchronized
-    fun add(slot: Int, channel: String, message: MessageUi): MessageUi {
-        val id = db.insertOrThrow("messages", null, row(slot, channel, message))
-        return message.copy(id = id)
+    fun add(slot: Int, channel: String, message: MessageUi, received: String? = null, unread: Int? = null): MessageUi? {
+        db.beginTransaction()
+        try {
+            if (received != null) {
+                db.rawQuery("SELECT 1 FROM messages WHERE slot = ? AND received = ?", slot, received).use { found ->
+                    if (found.moveToFirst()) return null
+                }
+            }
+            val values = row(slot, channel, message)
+            if (received != null) values.put("received", received)
+            val id = db.insertOrThrow("messages", null, values)
+            if (unread != null) setUnread(slot, channel, unread)
+            db.setTransactionSuccessful()
+            return message.copy(id = id)
+        } finally {
+            db.endTransaction()
+        }
     }
 
     /** Up to [limit] messages of a channel that come before [before], oldest first. */
@@ -187,5 +230,9 @@ class MessageDb(directory: File, vault: Vault) {
         const val FILE = "messages.db"
         const val KEY_FILE = "messages.key"
         const val KEY_BYTES = 32
+        const val VERSION = 2
+
+        // Rows written on this phone, and rows from before version 2, have no such ID.
+        const val RECEIVED_INDEX = "CREATE UNIQUE INDEX messages_received ON messages (slot, received) WHERE received IS NOT NULL"
     }
 }

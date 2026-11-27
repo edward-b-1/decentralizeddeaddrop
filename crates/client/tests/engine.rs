@@ -83,11 +83,22 @@ impl Person {
         Person::from_link(&link.to_string())
     }
 
+    /// Collects, and then says the messages are stored, as an app does once it has
+    /// written them to its own history.
     fn sync(&mut self) -> Vec<Event> {
         self.try_sync().unwrap()
     }
 
     fn try_sync(&mut self) -> Result<Vec<Event>, ClientError> {
+        let events = self.collect()?;
+        self.account.stored(&Person::ids(&events));
+        self.stored = self.account.to_bytes();
+        Ok(events)
+    }
+
+    /// Collects without saying the messages are stored: an app that has not yet
+    /// written them down, or that is closed before it can.
+    fn collect(&mut self) -> Result<Vec<Event>, ClientError> {
         let stored = &mut self.stored;
         self.account.sync(&self.keys, &mut |bytes| *stored = bytes.to_vec())
     }
@@ -95,6 +106,17 @@ impl Person {
     fn send(&mut self, channel: &str, text: &str) -> Result<bool, ClientError> {
         let stored = &mut self.stored;
         self.account.send(&self.keys, channel, text, &mut |bytes| *stored = bytes.to_vec())
+    }
+
+    /// The IDs of the messages among some events.
+    fn ids(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Message { id, .. } | Event::Unreadable { id, .. } => Some(id.clone()),
+                Event::ChannelsChanged => None,
+            })
+            .collect()
     }
 
     /// The texts among some events, as "name: text".
@@ -296,6 +318,64 @@ fn an_app_that_is_closed_and_reopened_carries_on() {
     assert_eq!(Person::texts(&anna.sync()), ["Ben: three"]);
 
     assert_eq!(Account::from_bytes(b"nonsense").err(), Some(ClientError::BadState));
+}
+
+#[test]
+fn a_message_is_kept_until_the_app_says_it_has_stored_it() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+    anna.send(&id, "one").unwrap();
+
+    // Ben's phone collects the message, and is switched off before the app has written
+    // it into its history. By then the server has wiped its copy.
+    let first = ben.collect().unwrap();
+    assert_eq!(Person::texts(&first), ["Anna: one"]);
+    assert_eq!(server.rows("messages"), 0);
+    ben.restart();
+
+    // It is still there, under the same ID, however many times it is asked for.
+    assert_eq!(ben.account.received(), first);
+    assert_eq!(ben.collect().unwrap(), first);
+    anna.send(&id, "two").unwrap();
+    let both = ben.collect().unwrap();
+    assert_eq!(Person::texts(&both), ["Anna: one", "Anna: two"]);
+    assert_eq!(both[0], first[0]);
+
+    // The app stores the first and says so; only the second is handed over from then on.
+    ben.account.stored(&Person::ids(&first));
+    ben.stored = ben.account.to_bytes();
+    ben.restart();
+    assert_eq!(Person::texts(&ben.collect().unwrap()), ["Anna: two"]);
+    assert!(ben.sync().len() == 1 && ben.sync().is_empty(), "stored, so not handed over again");
+}
+
+#[test]
+fn a_message_is_in_the_saved_state_before_the_server_is_told_to_wipe_it() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+    anna.send(&id, "one").unwrap();
+
+    // Every state Ben's phone is asked to save, with what the server held at that moment.
+    let mut saves: Vec<(Vec<u8>, i64)> = Vec::new();
+    ben.account.sync(&ben.keys, &mut |bytes| saves.push((bytes.to_vec(), server.rows("messages")))).unwrap();
+    assert_eq!(server.rows("messages"), 0);
+
+    // The phone dies the instant the server has been told: what is on its disk is the
+    // last state saved while the server still had the message.
+    let (on_disk, _) = saves.iter().rev().find(|(_, held)| *held > 0).expect("saved before the server is told");
+    ben.account = Account::from_bytes(on_disk).unwrap();
+    assert_eq!(Person::texts(&ben.account.received()), ["Anna: one"]);
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: one"]);
+
+    // State saved by a version that did not keep opened messages still loads.
+    let mut old: serde_json::Value = serde_json::from_slice(&ben.stored).unwrap();
+    let fields = old.as_object_mut().unwrap();
+    assert!(fields.remove("inbox").is_some());
+    assert!(Account::from_bytes(old.to_string().as_bytes()).is_ok());
 }
 
 #[test]

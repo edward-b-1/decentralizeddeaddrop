@@ -270,6 +270,17 @@ Known points about vodozemac, so nobody is surprised later:
 A message leaves the queue in exactly these two ways: delivered to all recipients, or
 maximum message age reached.
 
+**What "saves it" means in step 3.** Opening a message destroys the key that opens it, and
+the acknowledgement lets the server wipe its copy, so from then on the opened message on
+the device is the only copy anywhere. A device must therefore store the opened message
+and its new keys *in one write*, before it acknowledges. The client engine keeps opened
+messages in its own saved state for this, each under a random ID. It goes on handing a
+message to the app until the app says that ID is in its message history; the app keeps
+the ID with the message, so one handed over twice is stored once. A crash or a lost
+connection at any point leaves the message in at least one place the device still has.
+(Up to version 0.1.1 the app stored a message only after it had been acknowledged, and a
+failure in between lost it for good.)
+
 **Maximum message age is a per-channel setting** (decided 2026-11-26). The channel owner
 sets it; it is part of the signed channel record, so every member's phone can show it and
 the server cannot quietly change it.
@@ -363,8 +374,9 @@ that swaps keys and a removed member handed every sealed message.
 The **client engine** (`crates/client`) does everything an app does apart from drawing
 screens and holding the hardware keys: joining a server from a link, signing in, channels,
 invites, sending, receiving, and saving its state. It checks every claim a server makes.
-Sealed messages are stored before they are posted and state is stored before anything is
-acknowledged, so a crash loses nothing and never reuses a key; a message written with no
+Sealed messages are stored before they are posted. A received message is stored, with
+the keys as they stand after opening it, before it is acknowledged, and is kept until the
+app says it has it (§7). So a crash loses nothing and never reuses a key; a message written with no
 signal goes when the server is next reached. A command-line client, `deaddrop`, is built
 on it.
 

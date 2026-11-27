@@ -180,9 +180,12 @@ pub struct WaysInInfo {
     pub password_set: bool,
 }
 
+/// A message carries `id`, a random identifier the engine gives it. The engine hands a
+/// message over, under the same ID, until [`Session::stored`] says the app has it.
 #[derive(uniffi::Enum)]
 pub enum News {
     Message {
+        id: String,
         channel: String,
         sender: String,
         sender_name: Option<String>,
@@ -191,6 +194,7 @@ pub enum News {
     },
     /// A message arrived that cannot be opened.
     Unreadable {
+        id: String,
         channel: String,
         sender: String,
     },
@@ -201,10 +205,10 @@ pub enum News {
 impl From<Event> for News {
     fn from(event: Event) -> News {
         match event {
-            Event::Message { channel, sender, sender_name, text, sent } => {
-                News::Message { channel, sender, sender_name, text, sent }
+            Event::Message { id, channel, sender, sender_name, text, sent } => {
+                News::Message { id, channel, sender, sender_name, text, sent }
             }
-            Event::Unreadable { channel, sender } => News::Unreadable { channel, sender },
+            Event::Unreadable { id, channel, sender } => News::Unreadable { id, channel, sender },
             Event::ChannelsChanged => News::ChannelsChanged,
         }
     }
@@ -404,13 +408,30 @@ impl Session {
         Ok(sent?)
     }
 
-    /// Does everything due and returns what is new.
+    /// Does everything due and returns what is new, with every message not yet
+    /// [`Session::stored`]. Store the messages, then call that.
+    ///
+    /// After an error, call [`Session::received`]: messages may have been opened before
+    /// whatever failed, and the engine is by then the only place that holds them.
     pub fn sync(&self) -> Outcome<Vec<News>> {
         let mut account = self.account();
         let store = &self.store;
         let events = account.sync(&self.keys, &mut |bytes| store.save(bytes.to_vec()));
         store.save(account.to_bytes());
         Ok(events?.into_iter().map(News::from).collect())
+    }
+
+    /// Every message the engine has opened and the app has not yet [`Session::stored`].
+    pub fn received(&self) -> Vec<News> {
+        self.account().received().into_iter().map(News::from).collect()
+    }
+
+    /// The app has stored the messages with these IDs, somewhere that survives a
+    /// crash, so the engine may forget them.
+    pub fn stored(&self, ids: Vec<String>) {
+        let mut account = self.account();
+        account.stored(&ids);
+        self.store.save(account.to_bytes());
     }
 
     /// Waits up to `seconds` for the server to say there is something to collect.
