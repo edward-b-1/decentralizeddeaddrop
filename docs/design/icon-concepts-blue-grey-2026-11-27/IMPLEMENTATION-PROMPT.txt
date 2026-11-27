@@ -1,0 +1,28 @@
+Implement the chosen Decentralized Dead Drop icon in the Android application.
+
+Repository: C:/Users/Edward/source/repos/decentralizeddeaddrop
+Chosen reference: docs/design/icon-concepts-blue-grey-2026-11-27/04-sealed-conversation.png
+Decision: the user selected the letter combined with the chat bubble. This choice is final; the other three images are archived alternatives.
+
+Inspect the reference image and current repository instructions before editing. Preserve unrelated working-tree changes; other work is in progress.
+
+Design
+- Preserve the large cobalt-blue foreground chat bubble with its lower-left tail and the light-grey V-shaped envelope fold. Keep the offset slate-grey rear bubble and its right-side tail, separated clearly from the foreground.
+- Use #264A9A for blue, #68758A for slate grey, and #E9EDF4 for the light-grey background. Preserve the reference's proportions and visual balance.
+- Redraw clean vector geometry. The generated PNG is a visual reference and has imperfect transparency and edges; do not ship it as the launcher asset. Save an editable SVG master alongside the concept files and derive matching Android vector resources from it.
+- Keep the adaptive background separate from the foreground. Let Android apply the launcher mask; do not bake the reference's rounded-square tile or transparent outer margin into the foreground. Keep the symbol within the supported adaptive-icon safe area.
+
+Implementation
+- Update android/app/src/main/res/drawable/ic_launcher_foreground.xml.
+- Update android/app/src/main/res/mipmap-anydpi/ic_launcher.xml and icon_background in android/app/src/main/res/values/themes.xml as needed.
+- Add a dedicated monochrome vector for themed launcher icons. Preserve the envelope fold and separation between bubbles as transparent cutouts so the symbol remains readable in one colour.
+- Replace android/app/src/main/res/drawable/ic_notification.xml with a simplified monochrome version of the chosen mark, legible at status-bar size. Background.kt already references this resource; retain that wiring.
+- Confirm AndroidManifest.xml still points to the correct launcher resource and that the launch/splash presentation uses the new artwork consistently.
+- Keep this change focused on Android branding assets and narrow documentation updates. Preserve app behaviour, permissions, application ID, versions, signing and dependencies. Website branding and publishing are outside this task.
+
+Validation and handoff
+- Check official Android icon guidance for current adaptive, themed and notification requirements before finalizing the assets.
+- Build :app:assembleDebug from android/ using the existing Gradle wrapper and repository build instructions. If prerequisites are missing, report the specific blocker and complete the available resource checks.
+- Render and inspect circular, squircle and rounded-square launcher masks, light/dark backgrounds, themed monochrome rendering, small notification sizes, and the launch/splash presentation. Use an available emulator when practical; otherwise provide local visual previews and state the verification limit. Check for clipping, merged shapes and unreadable details.
+- Update only relevant placeholder-icon notes in the existing documentation after implementation, preserving concurrent edits.
+- Return the changed file list, visual previews, build result and any remaining limitations. Do not publish a release as part of this task.
