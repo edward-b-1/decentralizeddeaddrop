@@ -1,0 +1,803 @@
+<title>Dead Drop website mockup B</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: left-aligned pages on the app's cool grey ground. Dark mono panels always mean
+     "the server" (its queue, its terminal); everything else stays quiet around them. */
+  :root {
+    --bg: #F5F7FA; --surface: #FFFFFF; --surface-2: #E9EDF4; --line: #D3D9E3;
+    --ink: #141A24; --ink-soft: #465162; --muted: #586373;
+    --accent: #264A9A; --accent-soft: #DBE4F8; --on-accent: #FFFFFF;
+    --ok: #1B7245; --wait: #8F5B00; --danger: #B3261E;
+    --term: #10151D; --term-2: #1A212C; --term-line: #2A3442; --term-fg: #D5DCE8; --term-dim: #8793A6;
+    --term-accent: #9DB8FF; --term-ok: #6FD3A0; --term-wait: #F0B95B;
+    --shadow: rgba(20, 26, 36, .16);
+    --display: "IBM Plex Sans Condensed", "IBM Plex Sans", "Arial Narrow", system-ui, sans-serif;
+    --text: "IBM Plex Sans", system-ui, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Consolas, "Courier New", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11151C; --surface: #1A202A; --surface-2: #222A36; --line: #2F3846;
+      --ink: #E6EAF1; --ink-soft: #AAB4C3; --muted: #98A3B4;
+      --accent: #9DB8FF; --accent-soft: #24345C; --on-accent: #0E1A3A;
+      --ok: #6FD3A0; --wait: #F0B95B; --danger: #FF8A80;
+      --term: #090C11; --term-2: #131922; --term-line: #2F3846; --term-fg: #D5DCE8; --term-dim: #8793A6;
+      --term-accent: #9DB8FF; --term-ok: #6FD3A0; --term-wait: #F0B95B;
+      --shadow: rgba(0, 0, 0, .5);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #11151C; --surface: #1A202A; --surface-2: #222A36; --line: #2F3846;
+    --ink: #E6EAF1; --ink-soft: #AAB4C3; --muted: #98A3B4;
+    --accent: #9DB8FF; --accent-soft: #24345C; --on-accent: #0E1A3A;
+    --ok: #6FD3A0; --wait: #F0B95B; --danger: #FF8A80;
+    --term: #090C11; --term-2: #131922; --term-line: #2F3846; --term-fg: #D5DCE8; --term-dim: #8793A6;
+    --term-accent: #9DB8FF; --term-ok: #6FD3A0; --term-wait: #F0B95B;
+    --shadow: rgba(0, 0, 0, .5);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--text); font-size: 17px; line-height: 1.6; }
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  h1, h2, h3, p, ul, ol, dl, dd, figure, pre { margin: 0; }
+  h1, h2 { font-family: var(--display); font-weight: 600; letter-spacing: -.01em; text-wrap: balance; }
+  h1 { font-size: clamp(2.3rem, 5.4vw, 3.7rem); line-height: 1.04; }
+  h2 { font-size: clamp(1.6rem, 3vw, 2.1rem); line-height: 1.15; }
+  h3 { font-size: 1.06rem; font-weight: 600; line-height: 1.35; }
+  .eyebrow { font-family: var(--mono); font-size: .8rem; letter-spacing: .09em; text-transform: uppercase; color: var(--accent); }
+  .lede { font-size: 1.18rem; line-height: 1.55; color: var(--ink-soft); max-width: 60ch; }
+  .soft { color: var(--ink-soft); }
+  .small { font-size: .875rem; line-height: 1.5; color: var(--muted); }
+  .mono { font-family: var(--mono); font-size: .88em; }
+  .ph { border-bottom: 2px dashed var(--wait); cursor: help; }
+
+  /* ---------- mockup note (not part of the site) ---------- */
+  .mock { background: var(--surface-2); border-bottom: 1px solid var(--line); font-size: .82rem; line-height: 1.45; color: var(--ink-soft); }
+  .mock .wrap { padding-block: 8px; }
+
+  /* ---------- header ---------- */
+  .top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .top .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 24px; padding-block: 10px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; font-family: var(--display); font-weight: 600; font-size: 1.2rem; letter-spacing: -.005em; }
+  .brand svg { width: 28px; height: 28px; flex: none; color: var(--accent); }
+  .nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 20px; font-size: .95rem; }
+  .nav a { color: var(--ink-soft); text-decoration: none; padding: 6px 0; border-bottom: 2px solid transparent; }
+  .nav a:hover { color: var(--ink); }
+  .nav a[aria-current="page"] { color: var(--ink); border-bottom-color: var(--accent); }
+  .nav a.btn { color: var(--on-accent); border-bottom: none; padding: 7px 14px; font-size: .92rem; }
+
+  .btn { display: inline-flex; align-items: center; gap: 8px; font: 600 1rem/1.2 var(--text); padding: 13px 20px; border-radius: 8px; border: 1.5px solid var(--accent); background: var(--accent); color: var(--on-accent); text-decoration: none; cursor: pointer; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: var(--accent); }
+  .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+
+  /* ---------- page furniture ---------- */
+  .band { padding-block: 64px; }
+  .band + .band { border-top: 1px solid var(--line); }
+  .band.tint { background: var(--surface-2); }
+  .stack { display: flex; flex-direction: column; gap: 20px; }
+  .stack-lg { display: flex; flex-direction: column; gap: 40px; }
+  .head { display: flex; flex-direction: column; gap: 10px; max-width: 62ch; }
+  .prose { display: flex; flex-direction: column; gap: 16px; max-width: 66ch; }
+  .prose ul, .prose ol { padding-left: 1.2em; display: flex; flex-direction: column; gap: 8px; }
+  .pagehead { padding-block: 56px 40px; }
+  .pagehead .wrap { display: flex; flex-direction: column; gap: 16px; }
+
+  /* ---------- "the server" panels ---------- */
+  .term { background: var(--term); color: var(--term-fg); border: 1px solid var(--term-line); border-radius: 10px; font-family: var(--mono); font-size: .84rem; line-height: 1.55; box-shadow: 0 14px 34px var(--shadow); min-width: 0; overflow: hidden; }
+  .term-bar { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; padding: 10px 16px; background: var(--term-2); border-bottom: 1px solid var(--term-line); }
+  .term-bar b { font-weight: 500; }
+  .term .dim { color: var(--term-dim); }
+  .term .hi { color: var(--term-accent); }
+  .term .run { margin-left: auto; color: var(--term-ok); }
+  .term .run::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--term-ok); margin-right: 7px; }
+  .term pre { font: inherit; padding: 14px 16px; overflow-x: auto; white-space: pre; }
+  .term pre + pre { border-top: 1px solid var(--term-line); }
+  .term.flat { box-shadow: none; }
+  .qr-box { padding: 4px 16px 16px; }
+  .qr { display: block; width: min(250px, 100%); height: auto; }
+  .qr-light { fill: var(--term-fg); } .qr-dark { fill: var(--term); }
+
+  /* the queue */
+  .q-head { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px 6px; font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; color: var(--term-dim); }
+  .q { list-style: none; padding: 0 8px; display: flex; flex-direction: column; }
+  .q-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 10px 8px; border-top: 1px solid var(--term-line); }
+  .q-left { position: relative; min-width: 0; }
+  .q-live { display: flex; gap: 12px; min-width: 0; white-space: nowrap; }
+  .q-live b { font-weight: 500; flex: none; }
+  .q-cipher { color: var(--term-dim); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .q-end { position: absolute; inset: 0; opacity: 0; color: var(--term-ok); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q-row.aged .q-end { color: var(--term-wait); }
+  .q-marks { display: flex; gap: 7px; }
+  .q-marks i { width: 11px; height: 11px; border-radius: 50%; background: var(--term-accent); border: 1.5px solid var(--term-accent); }
+  .q-marks i.got { background: transparent; border-color: var(--term-dim); }
+  .q-row.wiped .q-live { opacity: 0; } .q-row.wiped .q-end { opacity: 1; }
+  .q-foot { padding: 12px 16px 14px; border-top: 1px solid var(--term-line); color: var(--term-dim); font-size: .78rem; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  .q-foot i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; border: 1.5px solid var(--term-accent); background: var(--term-accent); }
+  .q-foot i.got { background: transparent; border-color: var(--term-dim); }
+  @media (prefers-reduced-motion: no-preference) {
+    .q-row { animation: q-life 14s linear infinite; }
+    .q-row .q-live { animation: q-live 14s linear infinite; }
+    .q-row .q-end { animation: q-end 14s linear infinite; }
+    .q-row .q-marks i:nth-child(1) { animation: q-m1 14s linear infinite; }
+    .q-row .q-marks i:nth-child(2) { animation: q-m2 14s linear infinite; }
+    .q-row .q-marks i:nth-child(3) { animation: q-m3 14s linear infinite; }
+    .q-row.aged .q-marks i:nth-child(2), .q-row.aged .q-marks i:nth-child(3) { animation: none; }
+    .q-row:nth-child(2), .q-row:nth-child(2) * { animation-delay: -3.5s; }
+    .q-row:nth-child(3), .q-row:nth-child(3) * { animation-delay: -7s; }
+    .q-row:nth-child(4), .q-row:nth-child(4) * { animation-delay: -10.5s; }
+  }
+  @keyframes q-life { 0% { opacity: 0; } 4%, 93% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes q-live { 0%, 70% { opacity: 1; } 74%, 100% { opacity: 0; } }
+  @keyframes q-end { 0%, 72% { opacity: 0; } 76%, 100% { opacity: 1; } }
+  @keyframes q-m1 { 0%, 19.9% { background: var(--term-accent); border-color: var(--term-accent); } 20%, 100% { background: transparent; border-color: var(--term-dim); } }
+  @keyframes q-m2 { 0%, 41.9% { background: var(--term-accent); border-color: var(--term-accent); } 42%, 100% { background: transparent; border-color: var(--term-dim); } }
+  @keyframes q-m3 { 0%, 65.9% { background: var(--term-accent); border-color: var(--term-accent); } 66%, 100% { background: transparent; border-color: var(--term-dim); } }
+
+  /* ---------- home ---------- */
+  .hero { padding-block: 64px 56px; }
+  .hero .wrap { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 48px; align-items: center; }
+  .hero-text { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .hero figure { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .status { border-left: 4px solid var(--wait); background: var(--surface); padding: 14px 18px; border-radius: 0 8px 8px 0; font-size: .95rem; }
+  .status b { color: var(--wait); }
+
+  .steps { list-style: none; padding: 0; display: flex; flex-direction: column; counter-reset: step; }
+  .steps > li { counter-increment: step; display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr); gap: 8px 32px; padding-block: 28px; border-top: 1px solid var(--line); align-items: start; }
+  .steps > li::before { content: counter(step); font-family: var(--display); font-weight: 600; font-size: 3rem; line-height: .9; color: var(--accent); }
+  .steps .say { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .steps .say p { color: var(--ink-soft); }
+  .steps .show { min-width: 0; }
+  .steps.wide > li { grid-template-columns: 64px minmax(0, 1fr); }
+  .steps.wide .say { gap: 14px; }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .card .label { font-family: var(--mono); font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  .fp { display: grid; grid-template-columns: repeat(auto-fill, minmax(4.2ch, 1fr)); gap: 6px 14px; font-family: var(--mono); font-size: 1rem; font-variant-numeric: tabular-nums; }
+  .roster { list-style: none; padding: 0; display: flex; flex-direction: column; }
+  .roster li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: .95rem; }
+  .roster li span { color: var(--muted); font-family: var(--mono); font-size: .8rem; }
+  .digits { display: grid; grid-template-columns: repeat(3, auto); justify-content: start; gap: 6px 22px; font-family: var(--mono); font-size: 1.25rem; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+
+  .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 56px; }
+  .list { list-style: none; padding: 0; display: flex; flex-direction: column; }
+  .list li { padding: 14px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+  .list li b { font-weight: 600; }
+  .list li span { color: var(--ink-soft); font-size: .97rem; }
+  .list.out li b::before { content: "No "; color: var(--danger); }
+
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .97rem; }
+  th, td { text-align: left; vertical-align: top; padding: 12px 16px 12px 0; border-top: 1px solid var(--line); }
+  th { font-family: var(--mono); font-size: .74rem; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border-top: none; }
+  td.can { color: var(--ink); } td.cannot { color: var(--ink); }
+  th.can { color: var(--wait); } th.cannot { color: var(--ok); }
+  td code, p code, li code { font-family: var(--mono); font-size: .88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .band.tint td code, .band.tint p code { background: var(--surface); }
+
+  .cta .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 24px; }
+
+  /* ---------- download ---------- */
+  .dl { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 40px 56px; align-items: start; }
+  .dl-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+  .facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px 20px; font-size: .95rem; }
+  .facts dt { color: var(--muted); }
+  .facts dd { min-width: 0; overflow-wrap: anywhere; }
+  .hash { font-family: var(--mono); font-size: .8rem; line-height: 1.6; overflow-wrap: anywhere; }
+
+  /* ---------- footer ---------- */
+  footer { border-top: 1px solid var(--line); background: var(--surface-2); font-size: .92rem; color: var(--ink-soft); }
+  footer .wrap { padding-block: 36px 44px; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr); gap: 28px 40px; }
+  footer h3 { font-family: var(--mono); font-size: .74rem; font-weight: 500; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+  footer ul { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  footer a { color: var(--ink); }
+
+  @media (max-width: 860px) {
+    .hero .wrap, .two, .dl { grid-template-columns: minmax(0, 1fr); }
+    .steps > li { grid-template-columns: 44px minmax(0, 1fr); }
+    .steps > li::before { font-size: 2.3rem; }
+    .steps .show { grid-column: 2; }
+    .steps.wide > li { grid-template-columns: 44px minmax(0, 1fr); }
+    footer .wrap { grid-template-columns: minmax(0, 1fr); }
+    .band { padding-block: 48px; }
+    .hero { padding-block: 40px; }
+  }
+  @media (max-width: 480px) {
+    body { font-size: 16px; }
+    .steps > li, .steps.wide > li { grid-template-columns: minmax(0, 1fr); }
+    .steps .show { grid-column: 1; }
+    .q-cipher { display: none; }
+  }
+
+  /* ---------- mockup B: the landing page ---------- */
+  /* The hero keeps one look in both themes: night blue, with the app shown as it looks by day. */
+  :root {
+    --night: #0A1122; --night-2: #121C36; --night-line: #2A3757; --night-glow: rgba(78, 118, 224, .38);
+    --h-fg: #F1F4FB; --h-soft: #B7C2D8; --h-dim: #8492AD; --h-accent: #9DB8FF; --h-on-accent: #0E1A3A;
+    --p-screen: #F5F7FA; --p-surface: #FFFFFF; --p-bar: #E9EDF4; --p-line: #D3D9E3; --p-ink: #141A24; --p-muted: #586373; --p-mine: #DBE4F8; --p-accent: #264A9A;
+  }
+  .hero-b { background: radial-gradient(1000px 560px at 88% -12%, var(--night-glow), transparent 62%), linear-gradient(180deg, var(--night), var(--night-2)); color: var(--h-fg); padding-block: 72px 80px; }
+  .hero-b .wrap { display: flex; flex-direction: column; gap: 64px; }
+  .hb-top { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, .8fr); gap: 40px 64px; align-items: end; }
+  .hb-text { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+  .hero-b h1 { font-size: clamp(3.1rem, 8.6vw, 6.4rem); line-height: .94; letter-spacing: -.02em; }
+  .hero-b .eyebrow { color: var(--h-accent); }
+  .hero-b .lede { color: var(--h-soft); font-size: 1.22rem; }
+  .hero-b .small { color: var(--h-dim); }
+  .hero-b .btn { background: var(--h-accent); border-color: var(--h-accent); color: var(--h-on-accent); }
+  .hero-b .btn.ghost { background: transparent; color: var(--h-accent); }
+  .hero-b a:focus-visible { outline-color: var(--h-fg); }
+  .core { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; min-width: 0; }
+  .core li { display: flex; align-items: baseline; gap: 14px; padding: 13px 0; border-top: 1px solid var(--night-line); font-size: 1.14rem; font-weight: 500; line-height: 1.35; }
+  .core li:last-child { border-bottom: 1px solid var(--night-line); }
+  .core li::before { content: ""; flex: none; width: 9px; height: 9px; background: var(--h-accent); transform: translateY(-1px); }
+
+  .relay { display: grid; grid-template-columns: minmax(0, 250px) minmax(20px, 1fr) minmax(0, 420px) minmax(20px, 1fr) minmax(0, 250px); align-items: center; }
+  .node { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .node-label { font-family: var(--mono); font-size: .74rem; letter-spacing: .09em; text-transform: uppercase; color: var(--h-fg); }
+  .node-label span { color: var(--h-dim); }
+  .node-label span::before { content: "· "; }
+  .link { position: relative; height: 2px; margin-top: 30px; background: repeating-linear-gradient(90deg, var(--night-line) 0 7px, transparent 7px 14px); }
+  .link i { position: absolute; top: -6px; left: 0; width: 14px; height: 14px; margin-left: -7px; border-radius: 3px; background: var(--h-accent); opacity: 0; }
+  .relay .term { box-shadow: 0 18px 44px rgba(0, 0, 0, .45); }
+  .relay .q { min-height: 44px; }
+  .relay .q-row { border-top: none; }
+
+  .phone { background: var(--p-screen); color: var(--p-ink); border: 6px solid #000; border-radius: 26px; overflow: hidden; font-family: var(--text); font-size: .9rem; line-height: 1.35; box-shadow: 0 18px 44px rgba(0, 0, 0, .45); display: flex; flex-direction: column; }
+  .p-bar { display: flex; align-items: center; gap: 10px; padding: 12px 12px 10px; background: var(--p-bar); }
+  .p-bar svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--p-ink); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .p-bar b { display: block; font-weight: 500; font-size: 1rem; }
+  .p-bar small { display: block; font-size: .74rem; color: var(--p-muted); }
+  .p-msgs { display: flex; flex-direction: column; gap: 8px; padding: 14px 12px; min-height: 210px; justify-content: flex-end; }
+  .b { max-width: 86%; padding: 8px 11px; border-radius: 14px; background: var(--p-surface); border: 1px solid var(--p-line); align-self: flex-start; }
+  .b small { display: block; font-size: .72rem; font-weight: 500; color: var(--p-accent); }
+  .b.mine { align-self: flex-end; background: var(--p-mine); border-color: var(--p-mine); }
+  .p-send { display: flex; align-items: center; gap: 8px; padding: 8px 10px 12px; border-top: 1px solid var(--p-line); }
+  .p-send span { flex: 1; padding: 7px 12px; border-radius: 18px; background: var(--p-surface); border: 1px solid var(--p-line); color: var(--p-muted); font-size: .84rem; }
+  .p-send i { width: 30px; height: 30px; border-radius: 50%; background: var(--p-accent); flex: none; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .relay .b.sent { animation: r-sent 12s ease-out infinite; }
+    .relay .b.got { animation: r-got 12s ease-out infinite; }
+    .relay .q-row { animation: r-row 12s linear infinite; }
+    .relay .q-row .q-live { animation: r-live 12s linear infinite; }
+    .relay .q-row .q-end { animation: r-end 12s linear infinite; }
+    .relay .q-row .q-marks i:nth-child(1) { animation: r-m1 12s linear infinite; }
+    .relay .q-row .q-marks i:nth-child(2) { animation: r-m2 12s linear infinite; }
+    .relay .link.one i { animation: r-p1 12s linear infinite; }
+    .relay .link.two i { animation: r-p2 12s linear infinite; }
+  }
+  @keyframes r-sent { 0%, 4% { opacity: 0; transform: translateY(8px); } 8%, 95% { opacity: 1; transform: none; } 100% { opacity: 0; transform: none; } }
+  @keyframes r-got { 0%, 31% { opacity: 0; transform: translateY(8px); } 35%, 95% { opacity: 1; transform: none; } 100% { opacity: 0; transform: none; } }
+  @keyframes r-row { 0%, 15% { opacity: 0; } 19%, 84% { opacity: 1; } 90%, 100% { opacity: 0; } }
+  @keyframes r-live { 0%, 55% { opacity: 1; } 59%, 100% { opacity: 0; } }
+  @keyframes r-end { 0%, 56% { opacity: 0; } 60%, 100% { opacity: 1; } }
+  @keyframes r-m1 { 0%, 32.9% { background: var(--term-accent); border-color: var(--term-accent); } 33%, 100% { background: transparent; border-color: var(--term-dim); } }
+  @keyframes r-m2 { 0%, 51.9% { background: var(--term-accent); border-color: var(--term-accent); } 52%, 100% { background: transparent; border-color: var(--term-dim); } }
+  @keyframes r-p1 { 0%, 8% { left: 0; opacity: 0; } 9% { left: 0; opacity: 1; } 15% { left: 100%; opacity: 1; } 16%, 100% { left: 100%; opacity: 0; } }
+  @keyframes r-p2 { 0%, 24% { left: 0; opacity: 0; } 25% { left: 0; opacity: 1; } 31% { left: 100%; opacity: 1; } 32%, 100% { left: 100%; opacity: 0; } }
+  @keyframes r-p1v { 0%, 8% { top: 0; opacity: 0; } 9% { top: 0; opacity: 1; } 15% { top: 100%; opacity: 1; } 16%, 100% { top: 100%; opacity: 0; } }
+  @keyframes r-p2v { 0%, 24% { top: 0; opacity: 0; } 25% { top: 0; opacity: 1; } 31% { top: 100%; opacity: 1; } 32%, 100% { top: 100%; opacity: 0; } }
+
+  .steps-b { list-style: none; padding: 0; margin: 0; counter-reset: step; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+  .steps-b > li { counter-increment: step; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+  .steps-b .say { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 20px; }
+  .steps-b .say::before { content: counter(step); grid-row: 1 / span 2; font-family: var(--display); font-weight: 600; font-size: 4.2rem; line-height: .82; color: var(--accent); }
+  .steps-b h3 { font-family: var(--display); font-size: 1.6rem; line-height: 1.12; letter-spacing: -.01em; text-wrap: balance; }
+  .steps-b .say p { color: var(--ink-soft); grid-column: 2; }
+  .steps-b .show { margin-top: auto; min-width: 0; }
+  .steps-b .card { background: var(--bg); }
+  .scan { display: flex; align-items: center; gap: 20px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .scan .qr { width: 116px; flex: none; border-radius: 4px; }
+  .qr.on-card .qr-light { fill: #FFFFFF; } .qr.on-card .qr-dark { fill: #141A24; }
+  .scan-fp { display: flex; flex-direction: column; gap: 8px; min-width: 0; flex: 1; }
+  .scan-fp .label { font-family: var(--mono); font-size: .72rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  .scan-fp .fp { font-size: .9rem; gap: 4px 12px; }
+  .cta-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 24px; }
+
+  @media (max-width: 900px) {
+    .hb-top { grid-template-columns: minmax(0, 1fr); }
+    .hero-b { padding-block: 44px 52px; }
+    .hero-b .wrap { gap: 40px; }
+    .relay { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+    .node { width: min(100%, 420px); }
+    .link { width: 2px; height: 34px; margin: 8px 0; background: repeating-linear-gradient(180deg, var(--night-line) 0 7px, transparent 7px 14px); }
+    .link i { left: 1px; top: 0; margin-top: -7px; }
+    .p-msgs { min-height: 0; }
+    .steps-b { grid-template-columns: minmax(0, 1fr); }
+    .steps-b > li { padding: 22px 18px; }
+    .steps-b .say::before { font-size: 3.2rem; }
+    .steps-b h3 { font-size: 1.4rem; }
+  }
+  @media (max-width: 900px) and (prefers-reduced-motion: no-preference) {
+    .relay .link.one i { animation-name: r-p1v; }
+    .relay .link.two i { animation-name: r-p2v; }
+  }
+  @media (max-width: 480px) {
+    .scan { flex-direction: column; align-items: flex-start; }
+    .relay .q-cipher { display: none; }
+  }
+</style>
+
+<svg width="0" height="0" style="position: absolute" aria-hidden="true"><symbol id="qr" viewBox="0 0 53 53"><path d="M4 4h7v1h-7zM12 4h1v1h-1zM14 4h3v1h-3zM20 4h4v1h-4zM26 4h5v1h-5zM33 4h2v1h-2zM40 4h1v1h-1zM42 4h7v1h-7zM4 5h1v1h-1zM10 5h1v1h-1zM12 5h5v1h-5zM18 5h1v1h-1zM21 5h3v1h-3zM25 5h2v1h-2zM28 5h4v1h-4zM35 5h2v1h-2zM39 5h1v1h-1zM42 5h1v1h-1zM48 5h1v1h-1zM4 6h1v1h-1zM6 6h3v1h-3zM10 6h1v1h-1zM12 6h4v1h-4zM17 6h2v1h-2zM20 6h2v1h-2zM26 6h1v1h-1zM34 6h1v1h-1zM36 6h1v1h-1zM39 6h1v1h-1zM42 6h1v1h-1zM44 6h3v1h-3zM48 6h1v1h-1zM4 7h1v1h-1zM6 7h3v1h-3zM10 7h1v1h-1zM13 7h4v1h-4zM21 7h3v1h-3zM25 7h1v1h-1zM27 7h2v1h-2zM33 7h1v1h-1zM35 7h1v1h-1zM39 7h2v1h-2zM42 7h1v1h-1zM44 7h3v1h-3zM48 7h1v1h-1zM4 8h1v1h-1zM6 8h3v1h-3zM10 8h1v1h-1zM12 8h3v1h-3zM16 8h1v1h-1zM18 8h1v1h-1zM21 8h1v1h-1zM24 8h5v1h-5zM30 8h3v1h-3zM34 8h1v1h-1zM37 8h4v1h-4zM42 8h1v1h-1zM44 8h3v1h-3zM48 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM14 9h1v1h-1zM17 9h3v1h-3zM21 9h2v1h-2zM24 9h1v1h-1zM28 9h2v1h-2zM31 9h2v1h-2zM35 9h1v1h-1zM42 9h1v1h-1zM48 9h1v1h-1zM4 10h7v1h-7zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h1v1h-1zM28 10h1v1h-1zM30 10h1v1h-1zM32 10h1v1h-1zM34 10h1v1h-1zM36 10h1v1h-1zM38 10h1v1h-1zM40 10h1v1h-1zM42 10h7v1h-7zM15 11h1v1h-1zM17 11h2v1h-2zM22 11h1v1h-1zM24 11h1v1h-1zM28 11h9v1h-9zM38 11h3v1h-3zM4 12h1v1h-1zM7 12h9v1h-9zM17 12h1v1h-1zM20 12h1v1h-1zM22 12h1v1h-1zM24 12h5v1h-5zM30 12h4v1h-4zM37 12h1v1h-1zM40 12h2v1h-2zM44 12h1v1h-1zM46 12h3v1h-3zM4 13h1v1h-1zM7 13h1v1h-1zM9 13h1v1h-1zM11 13h1v1h-1zM13 13h2v1h-2zM17 13h1v1h-1zM22 13h1v1h-1zM24 13h1v1h-1zM26 13h3v1h-3zM30 13h3v1h-3zM38 13h1v1h-1zM41 13h2v1h-2zM44 13h3v1h-3zM4 14h1v1h-1zM6 14h5v1h-5zM15 14h2v1h-2zM20 14h4v1h-4zM25 14h3v1h-3zM31 14h1v1h-1zM33 14h1v1h-1zM35 14h4v1h-4zM41 14h1v1h-1zM47 14h2v1h-2zM4 15h1v1h-1zM8 15h2v1h-2zM12 15h4v1h-4zM18 15h1v1h-1zM20 15h2v1h-2zM25 15h3v1h-3zM29 15h1v1h-1zM31 15h2v1h-2zM34 15h2v1h-2zM37 15h2v1h-2zM40 15h2v1h-2zM43 15h1v1h-1zM45 15h2v1h-2zM6 16h1v1h-1zM8 16h6v1h-6zM16 16h2v1h-2zM23 16h1v1h-1zM25 16h1v1h-1zM28 16h2v1h-2zM31 16h2v1h-2zM35 16h1v1h-1zM37 16h1v1h-1zM39 16h1v1h-1zM44 16h3v1h-3zM48 16h1v1h-1zM4 17h1v1h-1zM6 17h1v1h-1zM8 17h1v1h-1zM11 17h1v1h-1zM14 17h2v1h-2zM17 17h1v1h-1zM19 17h1v1h-1zM21 17h1v1h-1zM24 17h2v1h-2zM27 17h2v1h-2zM30 17h1v1h-1zM32 17h3v1h-3zM41 17h2v1h-2zM44 17h5v1h-5zM6 18h3v1h-3zM10 18h1v1h-1zM14 18h1v1h-1zM18 18h1v1h-1zM20 18h3v1h-3zM25 18h1v1h-1zM28 18h3v1h-3zM32 18h1v1h-1zM41 18h1v1h-1zM44 18h1v1h-1zM4 19h2v1h-2zM7 19h1v1h-1zM15 19h2v1h-2zM19 19h2v1h-2zM23 19h5v1h-5zM30 19h4v1h-4zM35 19h1v1h-1zM37 19h4v1h-4zM42 19h1v1h-1zM45 19h1v1h-1zM5 20h1v1h-1zM9 20h2v1h-2zM13 20h3v1h-3zM17 20h2v1h-2zM20 20h4v1h-4zM26 20h1v1h-1zM28 20h2v1h-2zM33 20h1v1h-1zM36 20h1v1h-1zM38 20h1v1h-1zM41 20h1v1h-1zM43 20h1v1h-1zM47 20h2v1h-2zM4 21h3v1h-3zM8 21h2v1h-2zM12 21h2v1h-2zM16 21h3v1h-3zM20 21h1v1h-1zM22 21h1v1h-1zM26 21h1v1h-1zM28 21h1v1h-1zM31 21h1v1h-1zM33 21h2v1h-2zM39 21h3v1h-3zM43 21h1v1h-1zM46 21h1v1h-1zM4 22h2v1h-2zM7 22h1v1h-1zM9 22h7v1h-7zM17 22h8v1h-8zM28 22h2v1h-2zM32 22h1v1h-1zM35 22h3v1h-3zM39 22h3v1h-3zM44 22h1v1h-1zM48 22h1v1h-1zM4 23h1v1h-1zM7 23h1v1h-1zM9 23h1v1h-1zM11 23h1v1h-1zM14 23h1v1h-1zM16 23h1v1h-1zM19 23h3v1h-3zM24 23h2v1h-2zM27 23h1v1h-1zM30 23h1v1h-1zM33 23h2v1h-2zM36 23h2v1h-2zM40 23h1v1h-1zM42 23h1v1h-1zM44 23h3v1h-3zM4 24h2v1h-2zM7 24h6v1h-6zM16 24h4v1h-4zM22 24h7v1h-7zM30 24h1v1h-1zM32 24h1v1h-1zM37 24h1v1h-1zM39 24h8v1h-8zM6 25h3v1h-3zM12 25h3v1h-3zM16 25h2v1h-2zM19 25h1v1h-1zM23 25h2v1h-2zM28 25h1v1h-1zM31 25h1v1h-1zM33 25h3v1h-3zM39 25h2v1h-2zM44 25h3v1h-3zM7 26h2v1h-2zM10 26h1v1h-1zM12 26h1v1h-1zM14 26h1v1h-1zM18 26h2v1h-2zM23 26h2v1h-2zM26 26h1v1h-1zM28 26h4v1h-4zM34 26h7v1h-7zM42 26h1v1h-1zM44 26h1v1h-1zM46 26h3v1h-3zM4 27h2v1h-2zM7 27h2v1h-2zM12 27h3v1h-3zM21 27h1v1h-1zM24 27h1v1h-1zM28 27h4v1h-4zM34 27h1v1h-1zM37 27h1v1h-1zM39 27h2v1h-2zM44 27h1v1h-1zM46 27h1v1h-1zM48 27h1v1h-1zM6 28h7v1h-7zM17 28h1v1h-1zM20 28h1v1h-1zM23 28h7v1h-7zM31 28h3v1h-3zM36 28h1v1h-1zM40 28h6v1h-6zM48 28h1v1h-1zM7 29h1v1h-1zM9 29h1v1h-1zM11 29h3v1h-3zM16 29h1v1h-1zM22 29h2v1h-2zM25 29h7v1h-7zM34 29h2v1h-2zM39 29h1v1h-1zM43 29h2v1h-2zM46 29h2v1h-2zM5 30h1v1h-1zM7 30h1v1h-1zM10 30h1v1h-1zM13 30h2v1h-2zM16 30h1v1h-1zM18 30h1v1h-1zM20 30h7v1h-7zM28 30h1v1h-1zM30 30h3v1h-3zM37 30h1v1h-1zM40 30h1v1h-1zM43 30h1v1h-1zM45 30h1v1h-1zM4 31h1v1h-1zM7 31h2v1h-2zM11 31h1v1h-1zM13 31h1v1h-1zM18 31h1v1h-1zM20 31h6v1h-6zM27 31h4v1h-4zM33 31h2v1h-2zM36 31h1v1h-1zM38 31h2v1h-2zM41 31h5v1h-5zM47 31h1v1h-1zM4 32h1v1h-1zM6 32h1v1h-1zM8 32h3v1h-3zM13 32h1v1h-1zM18 32h4v1h-4zM27 32h1v1h-1zM31 32h1v1h-1zM38 32h3v1h-3zM42 32h3v1h-3zM46 32h3v1h-3zM6 33h2v1h-2zM13 33h5v1h-5zM23 33h1v1h-1zM25 33h3v1h-3zM31 33h1v1h-1zM33 33h6v1h-6zM42 33h3v1h-3zM46 33h1v1h-1zM48 33h1v1h-1zM4 34h1v1h-1zM7 34h1v1h-1zM10 34h3v1h-3zM14 34h3v1h-3zM18 34h2v1h-2zM22 34h2v1h-2zM26 34h3v1h-3zM31 34h4v1h-4zM36 34h1v1h-1zM38 34h3v1h-3zM42 34h4v1h-4zM48 34h1v1h-1zM4 35h2v1h-2zM7 35h1v1h-1zM9 35h1v1h-1zM14 35h2v1h-2zM17 35h2v1h-2zM20 35h3v1h-3zM24 35h3v1h-3zM28 35h1v1h-1zM30 35h3v1h-3zM34 35h1v1h-1zM37 35h1v1h-1zM40 35h2v1h-2zM43 35h1v1h-1zM45 35h2v1h-2zM4 36h1v1h-1zM6 36h1v1h-1zM10 36h5v1h-5zM18 36h1v1h-1zM23 36h2v1h-2zM26 36h2v1h-2zM29 36h3v1h-3zM34 36h2v1h-2zM37 36h1v1h-1zM43 36h4v1h-4zM4 37h1v1h-1zM8 37h1v1h-1zM16 37h3v1h-3zM21 37h1v1h-1zM26 37h5v1h-5zM34 37h1v1h-1zM39 37h1v1h-1zM43 37h2v1h-2zM46 37h3v1h-3zM8 38h1v1h-1zM10 38h1v1h-1zM15 38h1v1h-1zM17 38h1v1h-1zM19 38h1v1h-1zM22 38h2v1h-2zM27 38h1v1h-1zM29 38h2v1h-2zM33 38h1v1h-1zM36 38h1v1h-1zM38 38h2v1h-2zM41 38h2v1h-2zM44 38h1v1h-1zM48 38h1v1h-1zM5 39h4v1h-4zM12 39h3v1h-3zM17 39h4v1h-4zM23 39h1v1h-1zM27 39h3v1h-3zM32 39h1v1h-1zM34 39h1v1h-1zM36 39h3v1h-3zM41 39h1v1h-1zM44 39h1v1h-1zM46 39h3v1h-3zM4 40h1v1h-1zM7 40h2v1h-2zM10 40h2v1h-2zM16 40h2v1h-2zM20 40h1v1h-1zM22 40h8v1h-8zM32 40h1v1h-1zM35 40h1v1h-1zM39 40h8v1h-8zM48 40h1v1h-1zM12 41h4v1h-4zM17 41h3v1h-3zM22 41h3v1h-3zM28 41h2v1h-2zM31 41h5v1h-5zM39 41h2v1h-2zM44 41h1v1h-1zM46 41h1v1h-1zM4 42h7v1h-7zM12 42h1v1h-1zM14 42h1v1h-1zM16 42h2v1h-2zM22 42h1v1h-1zM24 42h1v1h-1zM26 42h1v1h-1zM28 42h5v1h-5zM34 42h1v1h-1zM38 42h3v1h-3zM42 42h1v1h-1zM44 42h4v1h-4zM4 43h1v1h-1zM10 43h1v1h-1zM12 43h1v1h-1zM14 43h1v1h-1zM16 43h2v1h-2zM19 43h3v1h-3zM24 43h1v1h-1zM28 43h4v1h-4zM33 43h5v1h-5zM39 43h2v1h-2zM44 43h3v1h-3zM4 44h1v1h-1zM6 44h3v1h-3zM10 44h1v1h-1zM12 44h3v1h-3zM16 44h1v1h-1zM18 44h1v1h-1zM22 44h8v1h-8zM31 44h1v1h-1zM38 44h1v1h-1zM40 44h6v1h-6zM48 44h1v1h-1zM4 45h1v1h-1zM6 45h3v1h-3zM10 45h1v1h-1zM12 45h1v1h-1zM14 45h3v1h-3zM19 45h6v1h-6zM26 45h1v1h-1zM33 45h1v1h-1zM35 45h2v1h-2zM38 45h4v1h-4zM43 45h2v1h-2zM46 45h2v1h-2zM4 46h1v1h-1zM6 46h3v1h-3zM10 46h1v1h-1zM13 46h1v1h-1zM17 46h3v1h-3zM21 46h1v1h-1zM24 46h1v1h-1zM28 46h1v1h-1zM33 46h2v1h-2zM36 46h1v1h-1zM39 46h3v1h-3zM44 46h1v1h-1zM47 46h2v1h-2zM4 47h1v1h-1zM10 47h1v1h-1zM14 47h3v1h-3zM21 47h4v1h-4zM28 47h1v1h-1zM30 47h5v1h-5zM36 47h1v1h-1zM39 47h1v1h-1zM41 47h1v1h-1zM43 47h2v1h-2zM47 47h2v1h-2zM4 48h7v1h-7zM12 48h3v1h-3zM17 48h3v1h-3zM21 48h2v1h-2zM29 48h2v1h-2zM39 48h3v1h-3zM43 48h2v1h-2zM0 53h53v1h-53z"/></symbol></svg>
+
+<div class="mock"><div class="wrap">Website mockup B, 27 November 2026. Five pages in one file: use the menu. <span class="ph">Dashed underlines</span> mark details still to be filled in. The download button has no file behind it yet.</div></div>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3.5" y="14" width="25" height="14.5" rx="3" fill="none" stroke="currentColor" stroke-width="2.6"/><rect x="11" y="3" width="10" height="15" rx="1.6" fill="currentColor"/></svg>
+      Decentralized Dead Drop
+    </a>
+    <nav class="nav" aria-label="Main">
+      <a data-nav href="#security">How it works</a>
+      <a data-nav href="#run">Run a server</a>
+      <a data-nav href="#privacy">Privacy</a>
+      <a data-nav class="btn" href="#get">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ============================== HOME ============================== -->
+<div class="view" id="home">
+  <section class="hero-b">
+    <div class="wrap">
+      <div class="hb-top">
+        <div class="hb-text">
+          <p class="eyebrow">Secure communication systems.</p>
+          <h1>No company in the middle.</h1>
+          <p class="lede">A private messenger you host yourself. Messages are sealed on your phone, wait on your server only until they are delivered, and are then wiped. The server can never read them.</p>
+          <div class="actions">
+            <a class="btn" href="#get"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/></svg>Download for Android</a>
+            <a class="btn ghost" href="#run">Run your own server</a>
+          </div>
+          <p class="small">Version 0.1.0 · Android 12 or later · free, with the source code public</p>
+        </div>
+        <ul class="core">
+          <li>End-to-end encrypted</li>
+          <li>No accounts</li>
+          <li>No phone number or email address required</li>
+          <li>No centralized service</li>
+          <li>No message history retained on the server</li>
+          <li>No adverts, analytics or tracking</li>
+        </ul>
+      </div>
+
+      <div class="relay" role="img" aria-label="Illustration: Sam sends a message from a phone. It crosses the server sealed, where it waits until Gran's phone and every other member's phone has collected it, and is then wiped. Only the phones can read it.">
+        <div class="node">
+          <p class="node-label">Sam's phone <span>readable</span></p>
+          <div class="phone">
+            <div class="p-bar"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg><div><b>Family</b><small>3 members</small></div></div>
+            <div class="p-msgs">
+              <div class="b theirs"><small>Gran</small>Are you coming on Sunday?</div>
+              <div class="b mine new sent">Yes. I'll bring the cake.</div>
+            </div>
+            <div class="p-send"><span>Message</span><i></i></div>
+          </div>
+        </div>
+        <div class="link one"><i></i></div>
+        <div class="node mid">
+          <p class="node-label">Your server <span>sealed, then wiped</span></p>
+          <div class="term">
+            <div class="term-bar"><b>deaddropd</b><span class="dim">203.0.113.7:7443</span><span class="run">running</span></div>
+            <div class="q-head"><span>In the queue</span><span>Still to collect</span></div>
+            <ol class="q">
+              <li class="q-row wiped"><div class="q-left"><div class="q-live"><b>sealed · 256 bytes</b><span class="q-cipher">kQ3vT9mXw0aB7dPzL2eRj8sYh4uNf6cGq1oVtKx5iMw</span></div><div class="q-end">wiped · delivered to every device</div></div><span class="q-marks"><i class="got"></i><i class="got"></i></span></li>
+            </ol>
+            <div class="q-foot"><span><i></i>a phone yet to collect it</span><span><i class="got"></i>collected</span></div>
+          </div>
+        </div>
+        <div class="link two"><i></i></div>
+        <div class="node">
+          <p class="node-label">Gran's phone <span>readable</span></p>
+          <div class="phone">
+            <div class="p-bar"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg><div><b>Family</b><small>3 members</small></div></div>
+            <div class="p-msgs">
+              <div class="b mine">Are you coming on Sunday?</div>
+              <div class="b theirs new got"><small>Sam</small>Yes. I'll bring the cake.</div>
+            </div>
+            <div class="p-send"><span>Message</span><i></i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap stack-lg">
+      <div class="head">
+        <p class="eyebrow">How it works</p>
+        <h2>Four steps, and none of them involves us.</h2>
+      </div>
+      <ol class="steps-b">
+        <li>
+          <div class="say"><h3>Run your own server</h3><p>One small program on any Linux machine with a public address. It needs no domain name and no certificate authority.</p></div>
+          <div class="show"><div class="term flat"><pre><span class="dim">$</span> docker compose up -d --build</pre></div></div>
+        </li>
+        <li>
+          <div class="say"><h3>Scan a QR code to connect</h3><p>The code carries the server's fingerprint, so your phone talks only to the machine that holds that key.</p></div>
+          <div class="show scan"><svg class="qr on-card" viewBox="0 0 53 53" role="img" aria-label="An example QR code for adding a server"><rect width="53" height="53" class="qr-light"/><use href="#qr" class="qr-dark"/></svg><div class="scan-fp"><span class="label">Server fingerprint</span><div class="fp"><span>znpe</span><span>pjc5</span><span>5xy7</span><span>et44</span><span>kfch</span><span>uw5z</span><span>dhaq</span><span>toe5</span><span>r6hf</span><span>xzky</span><span>ddzb</span><span>xkup</span><span>2erq</span></div></div></div>
+        </li>
+        <li>
+          <div class="say"><h3>Create channels and invite friends</h3><p>A channel is a group chat with one owner. Only the owner lets people in, and the server cannot add anyone.</p></div>
+          <div class="show"><div class="card"><span class="label">Family · member list, version 7</span><ul class="roster"><li>Sam <span>owner · signed this list</span></li><li>Gran <span>member</span></li><li>Alex <span>member</span></li></ul></div></div>
+        </li>
+        <li>
+          <div class="say"><h3>Messages are wiped as soon as they are delivered to each device</h3><p>If a phone stays away, the server's copy goes when it reaches the channel's maximum message age.</p></div>
+          <div class="show"><div class="term flat"><pre><span class="dim">delivered to every device  →</span> <span style="color: var(--term-ok)">wiped</span>
+<span class="dim">maximum age reached        →</span> <span style="color: var(--term-wait)">wiped</span></pre></div></div>
+        </li>
+      </ol>
+      <p><a href="#security">How it works, in full</a></p>
+    </div>
+  </section>
+
+  <section class="band tint">
+    <div class="wrap stack-lg">
+      <div class="cta-row">
+        <div class="head"><h2>Start with a server and two phones.</h2><p class="soft">The app does nothing on its own: it needs a server to add.</p></div>
+        <div class="actions"><a class="btn" href="#get">Download for Android</a><a class="btn ghost" href="#run">Run your own server</a></div>
+      </div>
+      <p class="status"><b>Early version.</b> Nobody independent has reviewed its security yet. Read <a href="#security">what it protects and what it does not</a> before you rely on it.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== DOWNLOAD ============================== -->
+<div class="view" id="get" hidden>
+  <section class="pagehead">
+    <div class="wrap">
+      <p class="eyebrow">Download</p>
+      <h1>Get the app for Android.</h1>
+      <p class="lede">The app comes straight from this page as a file you install yourself. It needs a server to connect to: <a href="#run">run one</a>, or ask whoever runs yours for an invite.</p>
+    </div>
+  </section>
+
+  <section class="band" style="padding-top: 0; border-top: none;">
+    <div class="wrap dl">
+      <div class="dl-card">
+        <div class="stack" style="gap: 6px;"><h2>Decentralized Dead Drop <span class="ph" title="The version number of the build that is published">0.1.0</span></h2><p class="soft">Android 12 or later · <span class="ph" title="The real size of the published file">14.5 MB</span></p></div>
+        <div class="actions"><button class="btn" type="button" id="apk"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12m0 0l-5-5m5 5l5-5M5 20h14"/></svg>Download deaddrop-0.1.0.apk</button></div>
+        <p class="small" id="apk-note" hidden>This is a mockup: there is no file behind the button yet.</p>
+        <dl class="facts">
+          <dt>SHA-256 of the file</dt><dd class="hash"><span class="ph" title="Calculated from the published file">3f9a1c07 5be2d4a8 90c6e1f3 7a24b85d<br>c1e09f62 48d7a3b5 6e0f9c21 d48b7a13</span></dd>
+          <dt>Signed by</dt><dd class="hash"><span class="ph" title="The SHA-256 fingerprint of the certificate the app is signed with">7B:2E:91:04:C8:5A:3D:F6<br>10:9B:E4:27:6C:D3:58:A1<br>0F:B9:42:7E:C5:36:8D:1A<br>E0:94:5F:2B:73:D8:6A:C4</span></dd>
+          <dt>Google Play</dt><dd>Not yet.</dd>
+        </dl>
+      </div>
+      <div class="stack-lg">
+        <div class="stack">
+          <h2>Installing it</h2>
+          <ol class="steps wide">
+            <li><div class="say"><h3>Open this page on your phone and download the file</h3></div></li>
+            <li><div class="say"><h3>Open the downloaded file</h3><p class="soft">Android asks whether your browser may install apps. Allow it; you can switch that off again afterwards.</p></div></li>
+            <li><div class="say"><h3>Open the app and add a server</h3><p class="soft">Servers, Add a server, Scan a QR code.</p></div></li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band tint">
+    <div class="wrap two">
+      <div class="stack">
+        <h2>Check what you downloaded</h2>
+        <p class="soft">On a computer, both of these should print the values shown above. The first proves the file arrived intact. The second proves who built it, and stays the same from one version to the next.</p>
+        <div class="term flat"><pre><span class="dim">$</span> sha256sum deaddrop-0.1.0.apk
+<span class="dim">$</span> apksigner verify --print-certs deaddrop-0.1.0.apk</pre></div>
+      </div>
+      <div class="stack">
+        <h2>Updates</h2>
+        <p class="soft">The app never contacts this website, so it cannot tell you a new version exists. Come back here now and then. Installing a new version over the old one keeps your servers, keys and messages.</p>
+        <h2 style="margin-top: 16px;">Build it yourself</h2>
+        <p class="soft">The source for the app and the server is at <a href="https://github.com/edward-b-1/decentralizeddeaddrop">github.com/edward-b-1/decentralizeddeaddrop</a>, with build instructions.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== RUN A SERVER ============================== -->
+<div class="view" id="run" hidden>
+  <section class="pagehead">
+    <div class="wrap">
+      <p class="eyebrow">Run a server</p>
+      <h1>One program, one folder, one port.</h1>
+      <p class="lede">A Dead Drop server makes its own key, and phones recognise it by that key's fingerprint. It needs no domain name, no certificate authority and no other service. The smallest VPS a provider sells is enough, because it holds messages only until they are delivered.</p>
+    </div>
+  </section>
+
+  <section class="band" style="padding-top: 0; border-top: none;">
+    <div class="wrap stack-lg">
+      <ol class="steps wide">
+        <li><div class="say"><h3>Get a Linux machine with a public address</h3><p class="soft">Ubuntu 24.04 or later is what the guide assumes. Note its IP address, or point a hostname at it. Whichever you choose goes into every invite, with port 7443.</p></div></li>
+        <li><div class="say"><h3>Lock it down</h3><p class="soft">The set-up script creates your user, turns off password logins, opens only SSH and port 7443, switches on automatic security updates and installs Docker.</p>
+          <div class="term flat"><pre><span class="dim">#</span> bash setup-vps.sh <span class="hi">&lt;your-username&gt;</span> <span class="hi">"&lt;your SSH public key&gt;"</span></pre></div></div></li>
+        <li><div class="say"><h3>Get the code and say where the server is</h3>
+          <div class="term flat"><pre><span class="dim">$</span> git clone https://github.com/edward-b-1/decentralizeddeaddrop.git
+<span class="dim">$</span> cd decentralizeddeaddrop/deploy
+<span class="dim">$</span> cp env.example .env
+<span class="dim">$</span> nano .env        <span class="dim"># set DEADDROP_PUBLIC to &lt;your address&gt;:7443</span></pre></div></div></li>
+        <li><div class="say"><h3>Start it</h3><p class="soft">The first build takes a few minutes. The log of the first start shows the fingerprint, a one-time operator token, and a link and QR code holding both.</p>
+          <div class="term">
+            <div class="term-bar"><b>docker compose logs deaddropd</b><span class="dim">first start</span></div>
+            <pre><span class="dim">$</span> docker compose up -d --build
+<span class="dim">$</span> docker compose logs --no-log-prefix deaddropd</pre>
+            <pre>Made this server's key (/data/deaddrop.key.pem) and certificate (/data/deaddrop.cert.pem).
+Keep the key file safe and backed up: phones recognise the server by it.
+<span class="dim">Server fingerprint (phones recognise the server by this; it is part of every link):</span>
+    <span class="hi">znpe-pjc5-5xy7-et44-kfch-uw5z-dhaq-toe5-r6hf-xzky-ddzb-xkup-2erq</span>
+<span class="dim">Operator token (shown once; the first device to register with it runs this server):</span>
+    5v2vdu44gupshjqjuovpo2aayjpigc3c
+<span class="dim">Link for the operator's phone (holds the operator token):</span>
+    deaddrop://203.0.113.7:7443/#fp=znpepjc55xy7et44kfchuw5zdhaqtoe5r6hfxzkyddzbxkup2erq&amp;t=5v2vdu44gupshjqjuovpo2aayjpigc3c
+<span class="dim">Or scan it in the app (Servers, Add a server, Scan a QR code):</span></pre>
+            <div class="qr-box"><svg class="qr" viewBox="0 0 53 53" role="img" aria-label="QR code of the link above"><rect width="53" height="53" class="qr-light"/><use href="#qr" class="qr-dark"/></svg></div>
+          </div>
+          <p class="small">Real output from the server, for an address reserved for examples. This token opens nothing.</p></div></li>
+        <li><div class="say"><h3>Become the operator</h3><p class="soft">In the app: Servers, Add a server, Scan a QR code, and point the phone at the terminal. That phone now runs the server: it switches the ways in on and off, makes invites and approves devices.</p></div></li>
+        <li><div class="say"><h3>Let people in</h3><p class="soft">From the operator's phone: Servers, your server, Invite a device. Each invite lets one new phone on, once.</p></div></li>
+      </ol>
+      <p class="soft">Prefer no Docker? The server is a single program with a systemd unit file. The <a href="https://github.com/edward-b-1/decentralizeddeaddrop/blob/main/docs/DEPLOYMENT.md">full guide</a> covers that, updating, and using a certificate of your own.</p>
+    </div>
+  </section>
+
+  <section class="band tint">
+    <div class="wrap two">
+      <div class="stack">
+        <h2>What to back up</h2>
+        <p class="soft">Everything is in one folder. The key file matters most, and it never changes: back it up once, somewhere safe.</p>
+        <div class="scroll"><table>
+          <thead><tr><th>File</th><th>If it is lost</th></tr></thead>
+          <tbody>
+            <tr><td><code>deaddrop.key.pem</code><br><span class="small">The server's key. Phones recognise the server by it.</span></td><td>Every phone refuses the server. Everyone has to add it again as a new one.</td></tr>
+            <tr><td><code>deaddrop.db</code><br><span class="small">Who is registered, channels, member lists, messages not yet collected.</span></td><td>Everyone has to register and be invited again.</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+      <div class="stack">
+        <h2>What the server logs</h2>
+        <p class="soft">One line for each request, with no address and no identifier in it. The single exception is a wrong server password, which is logged with the address it came from so that a firewall tool can block the guesser.</p>
+        <div class="term flat"><pre>2026-11-26T18:20:05Z password-failure from=203.0.113.7</pre></div>
+        <p class="soft">Someone who knows the password is never recorded, and neither is anyone using another way in.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap stack-lg">
+      <div class="head"><h2>Ways in</h2><p class="soft">The person running the server chooses which of these it accepts, and can combine them. Getting onto a server grants nothing inside it: every channel has its own owner and its own invites.</p></div>
+      <div class="scroll"><table>
+        <thead><tr><th>Way in</th><th>How it works</th><th>Good for</th></tr></thead>
+        <tbody>
+          <tr><td><b>Invite</b></td><td>The operator makes a link or QR code that lets one new phone on, once.</td><td>The normal case</td></tr>
+          <tr><td><b>Server password</b></td><td>One shared password. Wrong guesses are limited to ten in ten minutes from any one address.</td><td>Small trusted groups</td></tr>
+          <tr><td><b>Approval</b></td><td>A new phone waits until the operator approves it.</td><td>Strict servers</td></tr>
+          <tr><td><b>Open</b></td><td>Anyone who can reach the server may register.</td><td>Private networks, testing</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== HOW IT WORKS / SECURITY ============================== -->
+<div class="view" id="security" hidden>
+  <section class="pagehead">
+    <div class="wrap">
+      <p class="eyebrow">How it works</p>
+      <h1>What protects your messages, and what does not.</h1>
+      <p class="lede">A plain account of the design. The full specification, including the decisions still open, is <a href="https://github.com/edward-b-1/decentralizeddeaddrop/blob/main/docs/PROTOCOL.md">PROTOCOL.md</a> in the source.</p>
+      <p class="status" style="max-width: 66ch;"><b>Not independently reviewed.</b> The encryption library this is built on, vodozemac from the Matrix project, was audited in 2022. Decentralized Dead Drop itself has had no outside review. Treat it accordingly.</p>
+    </div>
+  </section>
+
+  <section class="band" style="padding-top: 0; border-top: none;">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>Knowing it is the right server</h2>
+        <p>Every connection uses TLS 1.3. The server has a private key, and its fingerprint is a hash of the matching public key, written as 52 letters and digits. The fingerprint travels in every invite link and QR code.</p>
+        <p>A phone that has the fingerprint accepts exactly the server that holds that key. It does not ask a certificate authority, so it works the same for a bare IP address as for a hostname. Someone who takes over the server's address does not have its key, and the app refuses them.</p>
+        <p>If you type an address by hand there is no fingerprint to check against, so the app shows you the one it found and asks you to compare it with the person who runs the server. After that the phone remembers it, and refuses any server that does not hold the same key.</p>
+      </div>
+      <div class="stack">
+        <div class="card"><span class="label">Server fingerprint</span><div class="fp"><span>znpe</span><span>pjc5</span><span>5xy7</span><span>et44</span><span>kfch</span><span>uw5z</span><span>dhaq</span><span>toe5</span><span>r6hf</span><span>xzky</span><span>ddzb</span><span>xkup</span><span>2erq</span></div></div>
+        <div class="term flat"><pre>deaddrop://<span class="hi">203.0.113.7:7443</span>/#fp=<span class="dim">znpepjc5…2erq</span>&amp;t=<span class="dim">5v2vdu44…</span></pre></div>
+        <p class="small">An invite link. The app opens it itself; no website is involved, and nothing after the # is ever sent in a request.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band tint">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>Who you are</h2>
+        <p>There is no phone number, email address or password. Your phone makes its identity keys in its secure hardware, and those keys are your account.</p>
+        <p>You get a fresh identity for every server, so two servers cannot tell that the same phone uses both. The name people see is a label you choose in each channel.</p>
+        <h2 style="margin-top: 20px;">Safety numbers</h2>
+        <p>Any two members can compare thirty digits, or scan them as a QR code. Matching numbers mean each phone holds the other's real keys. This is what catches a server that tries to slip a device of its own into a channel under someone else's name.</p>
+      </div>
+      <div class="stack">
+        <div class="card"><span class="label">Safety number with Gran</span><div class="digits"><span>43792</span><span>05729</span><span>00507</span><span>13378</span><span>10572</span><span>01825</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>Channels and the member list</h2>
+        <p>A channel is a group chat on one server. A two-person conversation is a channel with two members.</p>
+        <p>Whoever creates a channel owns it. Joining takes an invite from the owner, after which you ask to join and the owner lets you in. Nobody is put in a channel without asking.</p>
+        <p>The owner's phone signs the whole member list, and every change is a new list with a higher version. Phones never accept an older one. So the server cannot add a member, and cannot keep one the owner removed.</p>
+      </div>
+      <div class="prose">
+        <h2>How messages are sealed</h2>
+        <p>This is the design Signal uses for groups and the one Matrix uses. Each phone has its own sending ratchet for each channel: every message uses the next key, and the used key is destroyed. Phones hand their ratchets to one another through private sessions between each pair of devices.</p>
+        <p>A phone winds its receiving ratchets forward past each message it has opened. Neither that message nor anything earlier can be opened again from what the server held, even by someone who later takes the phone.</p>
+        <p>Sending ratchets are replaced whenever the member list changes, so a removed member gets nothing new and a new member gets nothing old. Messages are padded to fixed sizes (256 bytes, then doubling), so every short text looks the same size.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap two">
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Left out on purpose</p><h2>What it does not have</h2></div>
+        <ul class="list out">
+          <li><b>account</b><span>No phone number, no email address, no password. Your phone's keys are your identity.</span></li>
+          <li><b>central service</b><span>This website is information only. The app never contacts it.</span></li>
+          <li><b>delivery reports or read receipts</b><span>Nobody is told when, or whether, you collected a message.</span></li>
+          <li><b>push service</b><span>The app keeps its own connection to your servers. Nothing about your messages passes through Google.</span></li>
+          <li><b>history on the server</b><span>A server holds a message until it is collected, and no longer.</span></li>
+          <li><b>adverts, analytics or tracking</b><span>In the app, on the server, or on this website.</span></li>
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Built in</p><h2>What it does have</h2></div>
+        <ul class="list">
+          <li><b>End-to-end encryption that moves on</b><span>Every message uses the next key and the used key is destroyed. Keys taken from a phone later cannot open messages recorded earlier.</span></li>
+          <li><b>A fresh identity on every server</b><span>Two servers cannot tell that the same phone uses both.</span></li>
+          <li><b>Safety numbers</b><span>Thirty digits that two people compare, or scan, to be sure nobody is in the middle.</span></li>
+          <li><b>Invites as a QR code or a link</b><span>For a server or for a channel. The app opens the link itself; no website is involved.</span></li>
+          <li><b>Four ways onto a server</b><span>An invite, a password, approval of each new device, or open to anyone. The person running it chooses.</span></li>
+          <li><b>Quiet notifications</b><span>They say only "New message" unless you choose to show more.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="band tint">
+    <div class="wrap stack-lg">
+      <div class="head"><h2>What a server can do, and what it cannot</h2><p class="soft">For a server that has been broken into, or is run by someone hostile.</p></div>
+      <div class="scroll">
+        <table>
+          <thead><tr><th class="can">It could</th><th class="cannot">But it could not</th></tr></thead>
+          <tbody>
+            <tr><td>Refuse service, or drop or delay messages</td><td>Read any message. It never holds a key.</td></tr>
+            <tr><td>See which devices are in which channel, the names they chose there, and when they send</td><td>Forge a message from a member. Messages are signed.</td></tr>
+            <tr><td>See message sizes (rounded up to fixed steps) and the addresses phones connect from</td><td>Add a member that other phones accept, or keep one the owner removed</td></tr>
+            <tr><td>Keep sealed copies it claims to have wiped</td><td>Open them later, even with a phone seized afterwards</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap two">
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Limits</p><h2>What it does not protect against</h2></div>
+        <ul class="list">
+        <li><b>Someone with your unlocked phone</b><span>They can read what is on it. Messages already opened are stored on the phone, encrypted with a key in its secure hardware.</span></li>
+        <li><b>Being seen to use it</b><span>A server, and anyone watching the network, can see that your phone connects, when, and roughly how much. They cannot see what is said.</span></li>
+        <li><b>Blocking</b><span>Anyone in the middle, or the server, can stop messages getting through. Nothing prevents that.</span></li>
+        <li><b>A member who copies what they read</b><span>Encryption ends at the people in the channel.</span></li>
+        <li><b>Mistakes in this software</b><span>It is new and unreviewed. The source is public so that it can be checked.</span></li>
+        </ul>
+      </div>
+      <div class="stack">
+        <div class="head"><p class="eyebrow">Before you choose it</p><h2>What this design costs you</h2></div>
+        <ul class="list">
+        <li><b>Lose your phone, lose your messages</b><span>And your place in every channel. There is no backup and no way to sign in again.</span></li>
+        <li><b>New members see nothing from before</b><span>Neither does a new phone. The server has no history to give.</span></li>
+        <li><b>A channel depends on its owner's phone</b><span>If the owner loses it, the channel can no longer change. Members can still leave.</span></li>
+        <li><b>Someone has to run the server</b><span>And keep its key file safe.</span></li>
+        <li><b>It uses some battery</b><span>Staying connected without a push service is not free.</span></li>
+        <li><b>Text only, Android only, for now</b><span>Pictures, audio and video are planned.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ============================== PRIVACY ============================== -->
+<div class="view" id="privacy" hidden>
+  <section class="pagehead">
+    <div class="wrap">
+      <p class="eyebrow">Privacy policy</p>
+      <h1>We receive nothing.</h1>
+      <p class="lede">The app has no account with us, no connection to any server of ours, no analytics, no adverts and no crash reporting. It talks only to the servers you add to it, which are run by you or by people you know.</p>
+      <p class="small">Decentralized Dead Drop is made by <span class="ph" title="How you want to be identified, for example: an individual developer">an individual developer</span>. Last updated <span class="ph" title="The date the policy is published">27 November 2026</span>.</p>
+    </div>
+  </section>
+
+  <section class="band" style="padding-top: 0; border-top: none;">
+    <div class="wrap two">
+      <div class="prose">
+        <h2>What the app keeps on your phone</h2>
+        <ul>
+          <li>Your identity keys, in the phone's secure hardware. They never leave it.</li>
+          <li>For each server you add: its address and fingerprint, your channels, their members' names, your message history, and the everyday keys that seal and open messages. These are stored encrypted with a key held in the phone's secure hardware, and are left out of phone backups.</li>
+          <li>Two settings: whether to stay connected in the background, and whether notifications show message text.</li>
+        </ul>
+        <p>Removing a server in the app destroys your keys and history for it. Uninstalling the app destroys all of it.</p>
+        <h2 style="margin-top: 20px;">The camera and notifications</h2>
+        <p>The camera is used only to scan QR codes, when you ask it to. Pictures are read on the phone and are neither kept nor sent anywhere. Notifications are made on the phone itself: the app uses no push service.</p>
+        <h2 style="margin-top: 20px;">This website</h2>
+        <p>It sets no cookies, runs no analytics and loads nothing from anyone else. Its server keeps no log of visitors or downloads.</p>
+      </div>
+      <div class="prose">
+        <h2>What goes to a server you add</h2>
+        <p>A server is run by whoever gave you its address, and they are responsible for it. By design it receives as little as possible.</p>
+        <ul>
+          <li><b>It can see</b> a device ID that the app makes for that server alone (not a hardware identifier); the names of the channels you are in; the name you chose in each; who else is in them; when messages pass through and their size to the nearest step; and the network address you connect from.</li>
+          <li><b>It cannot see</b> what your messages say.</li>
+          <li><b>It keeps messages</b> only until every member has received them, or until the maximum age the channel's owner has set, and then wipes them.</li>
+          <li><b>Its log</b> records no addresses and no identifiers, with one exception: an address that gets the server's password wrong.</li>
+        </ul>
+        <p>Taking a server off your phone deletes your device, your place in its channels and the channels you own from that server.</p>
+        <h2 style="margin-top: 20px;">Children</h2>
+        <p>The app is not intended for anyone under 18.</p>
+        <h2 style="margin-top: 20px;">Changes and contact</h2>
+        <p>If this policy changes, the new version will be published here with a new date. Questions: <span class="ph mono" title="A contact address, still to be set up">support@decentralizeddeaddrop.com</span></p>
+      </div>
+    </div>
+  </section>
+</div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="stack" style="gap: 10px;">
+      <a class="brand" href="#home" style="font-size: 1.05rem;">Decentralized Dead Drop</a>
+      <p>Secure communication systems.</p>
+      <p class="small">This website sets no cookies, runs no analytics and keeps no visitor log. The app never contacts it.</p>
+    </div>
+    <div>
+      <h3>The app</h3>
+      <ul><li><a href="#get">Download</a></li><li><a href="#security">How it works</a></li><li><a href="#privacy">Privacy policy</a></li></ul>
+    </div>
+    <div>
+      <h3>Your server</h3>
+      <ul><li><a href="#run">Run a server</a></li><li><a href="https://github.com/edward-b-1/decentralizeddeaddrop">Source code</a></li><li><a href="https://github.com/edward-b-1/decentralizeddeaddrop/blob/main/docs/PROTOCOL.md">Protocol</a></li></ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Mockup only: the five pages live in one file and the menu switches between them.
+  // The real site is five plain pages with no script.
+  const views = [...document.querySelectorAll('.view')];
+  function show() {
+    const id = (location.hash || '#home').slice(1);
+    const view = views.find(v => v.id === id) || views[0];
+    views.forEach(v => { v.hidden = v !== view; });
+    document.querySelectorAll('[data-nav]').forEach(a => {
+      if (a.getAttribute('href') === '#' + view.id) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+    });
+    window.scrollTo(0, 0);
+  }
+  window.addEventListener('hashchange', show);
+  show();
+  document.getElementById('apk').addEventListener('click', () => { document.getElementById('apk-note').hidden = false; });
+</script>
