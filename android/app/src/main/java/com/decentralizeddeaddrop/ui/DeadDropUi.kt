@@ -69,6 +69,7 @@ sealed interface Screen {
     data class Server(val slot: Int) : Screen
     data class Devices(val slot: Int) : Screen
     data class Safety(val key: String, val device: String) : Screen
+    data object Licences : Screen
 }
 
 @Composable
@@ -143,6 +144,7 @@ fun DeadDropUi(openedLink: String?, onLinkHandled: () -> Unit, openedChannel: St
                 is Screen.CheckServer -> CheckServerScreen(screen, back) { stack.removeRange(1, stack.size) }
                 is Screen.Server -> server(screen.slot).orBack(back) { ServerScreen(it, back, go) }
                 is Screen.Devices -> server(screen.slot).orBack(back) { DevicesScreen(it, back) }
+                Screen.Licences -> LicencesScreen(back)
             }
             }
         }
@@ -177,7 +179,7 @@ private fun Home(servers: List<ServerUi>, tab: Int, onTab: (Int) -> Unit, go: (S
         when (tab) {
             0 -> ChannelsTab(servers, go)
             1 -> ServersTab(servers, go)
-            else -> SettingsTab()
+            else -> SettingsTab(go)
         }
     }
 }
@@ -292,7 +294,7 @@ private fun ServersTab(servers: List<ServerUi>, go: (Screen) -> Unit) {
 }
 
 @Composable
-private fun SettingsTab() {
+private fun SettingsTab(go: (Screen) -> Unit) {
     val context = LocalContext.current
     var background by remember { mutableStateOf(Prefs.background(context)) }
     var showText by remember { mutableStateOf(Prefs.showText(context)) }
@@ -328,6 +330,7 @@ private fun SettingsTab() {
         Heading("About")
         Item("Decentralized Dead Drop", detail = "Secure communication systems.")
         Item("Version", value = "0.1.0")
+        Item("Licences", detail = "This app's licence, and the software it is built on", onClick = { go(Screen.Licences) })
         Note("Messages are sealed on this phone and can be opened only by the members of a channel. Servers hold them only until they are delivered or too old, and can never read them.")
         Note("This is an early version. It has had no independent security review.")
     }

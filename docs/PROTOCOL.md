@@ -384,5 +384,5 @@ Not built yet:
 - Blocking a person and reporting, which the Play Store expects (`docs/PLAY_STORE.md`).
 - A proper message database (history is one encrypted file per server), disappearing
   messages and an app lock (§10).
-- An icon and store graphics. The website's pages are in `site/` but not yet published.
+- An icon and store graphics.
 - Everything in §11.

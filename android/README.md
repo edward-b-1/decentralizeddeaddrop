@@ -31,6 +31,7 @@ with `deaddropd --public 10.0.2.2:7443` so the links it prints work from the emu
 | `data/Servers.kt` | Every server the phone is on: its engine session, a background thread that collects messages, and what the screens show. |
 | `ui/` | The screens. `DeadDropUi.kt` holds the tabs and navigation. |
 | `ui/Qr.kt`, `ui/QrCodes.kt` | QR codes, made and read on the phone (ZXing, with CameraX for the camera). No Google service is involved. |
+| `ui/Licences.kt` | Settings, Licences: this app's licence and those of every library built in. The text is `assets/licences.txt`, written by `python tools/licences.py`; run that again when a dependency changes. |
 | `service/Background.kt` | Staying connected while the app is closed: the foreground service, notifications, the receiver that reconnects after a restart, and the two settings. |
 
 Opening a `deaddrop://` link starts the app on the right screen (add a server, or join a

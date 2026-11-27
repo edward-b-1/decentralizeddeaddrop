@@ -23,20 +23,31 @@ certificate, no visitor log, and headers that forbid scripts and anything from a
 site. Copy this folder to `/srv/decentralizeddeaddrop` on the server. The site must be
 served that way for its own claims ("keeps no visitor log") to be true.
 
-## Before it goes live
+- `deploy/site/setup-site.sh`: one-time set-up and hardening of a fresh server (run
+  there, as root, with the Caddyfile beside it).
+- `sh deploy/site/publish.sh USER@HOST`: copies this folder to the server.
 
-- [ ] A build of the app to offer: put it at `download/deaddrop-<version>.apk` on the
-      server (not in this repository).
-- [ ] `download.html`: the version, the size, the file name, the file's SHA-256 and the
-      signing certificate's SHA-256 (the comment marked RELEASE shows where). Every
-      release changes all but the last.
-- [ ] `privacy.html`: the date, who makes the app, and a contact address that works.
-- [ ] Every statement on the site is still true of the code. Public claims must match
-      what is built.
+## Releasing a version of the app
 
-To get the two fingerprints for a release:
+The site went live on 27 November 2026 with version 0.1.0.
 
-```
-sha256sum deaddrop-<version>.apk
-apksigner verify --print-certs deaddrop-<version>.apk
-```
+1. `python tools/licences.py`, if any dependency changed. It rewrites the licence notices
+   in the app and `licences.txt` here.
+2. Raise `versionCode` and `versionName` in `android/app/build.gradle.kts` (and the
+   version shown in the app's Settings).
+3. `sh android/build-engine.sh`, then `./gradlew assembleRelease` in `android/`. The
+   build is signed when `android/keystore.properties` exists (`docs/PLAY_STORE.md`
+   section 6). Every version must be signed with the same key, or phones refuse the
+   update.
+4. Try the built file on a phone or the emulator.
+5. In `download.html` (the comment marked RELEASE shows where): the version, the size,
+   the file name and the file's SHA-256. The "Signed by" fingerprint never changes.
+
+   ```
+   sha256sum app-release.apk
+   apksigner verify --print-certs app-release.apk
+   ```
+6. Copy the file to the server as `/srv/decentralizeddeaddrop/download/deaddrop-<version>.apk`,
+   then `sh deploy/site/publish.sh USER@HOST`.
+
+Also check before publishing: every statement on the site is still true of the code.

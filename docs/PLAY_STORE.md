@@ -13,9 +13,9 @@ Re-check them whenever the app changes.
 | | Item | Status |
 |---|---|---|
 | ✅ | Release build set up: shrunk, and signed when `android/keystore.properties` exists | `./gradlew bundleRelease` (after `sh android/build-engine.sh`) |
-| 👤 | **Create and back up the upload key** (§6) | To do |
-| 👤 | A contact address, for example `support@decentralizeddeaddrop.com` | To do |
-| ⬜ | Website at `decentralizeddeaddrop.com` with the privacy policy | Text drafted in `docs/store/privacy-policy.md`; the site is not built |
+| 👤 | **Back up the signing key** (§6) | Created 27 November 2026. Back it up |
+| 👤 | A contact address | Decided 27 November 2026: there is none, and the website points to GitHub issues. Google Play requires a contact email on every listing, so one is needed before the app goes there |
+| ✅ | Website at `decentralizeddeaddrop.com` with the privacy policy | Live since 27 November 2026 (`site/`) |
 | ⬜ | App icon, feature graphic, screenshots | Not made. The icon in the app is a placeholder |
 | ⬜ | A way to block someone and to report a channel (§7) | Not built; Play expects it of apps where people exchange content |
 | ⬜ | Tried on real phones | Only the emulator so far |
@@ -134,9 +134,11 @@ Other permissions:
 
 ## 6. The upload key 👤 (important)
 
-Not created yet. When it is:
+Created 27 November 2026: `C:\Users\Edward\.deaddrop\upload-keystore.jks` (outside the repository, as Pocket Radio's is). Its certificate's SHA-256 is
+`E6:53:8A:A9:C7:2A:8B:C5:14:CF:BD:07:25:C7:18:6A:B7:C4:61:72:83:7D:B1:1D:CD:B5:17:97:D1:69:E5:69`, the "Signed by" value on the website's download page.
 
-- Keep the keystore outside the repository (Pocket Radio's is in `C:\Users\Edward\.pocketradio\`; `C:\Users\Edward\.deaddrop\upload-keystore.jks` would match).
+- **It already signs the app people download from the website.** If it is lost, nobody who installed from the website can ever be given an update: they would have to uninstall, losing their keys and messages.
+- **Decide before creating the app in the Play Console:** by default Google signs the Play version with a key of its own, and then a phone cannot move between the website's version and Play's without uninstalling. To keep them interchangeable, choose to give Google this key when Play App Signing is set up (the option to use your own key). That choice cannot be changed afterwards.
 - `android/keystore.properties` (git-ignored) tells the build where it is:
   ```
   storeFile=C:/Users/Edward/.deaddrop/upload-keystore.jks
@@ -144,7 +146,7 @@ Not created yet. When it is:
   keyAlias=upload
   keyPassword=...
   ```
-- **Back up both somewhere off this PC.** If the upload key is lost, uploads stop until Google resets it, which takes days and ID checks.
+- **Back up both somewhere off this PC.**
 
 ## 7. Before production
 

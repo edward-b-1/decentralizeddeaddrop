@@ -59,4 +59,5 @@ The app is not intended for anyone under 18.
 ## Changes and contact
 
 If this policy changes, the new version will be published here with a new date.
-Questions: [contact address].
+There is no support address. Questions can be raised as an issue at
+<https://github.com/edward-b-1/decentralizeddeaddrop/issues>, which is public: put nothing private in one.
