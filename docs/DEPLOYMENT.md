@@ -72,7 +72,7 @@ sudo install -m 755 target/release/deaddropd /usr/local/bin/deaddropd
 echo 'DEADDROP_PUBLIC=<address>:7443' | sudo tee /etc/deaddrop.env
 sudo install -m 644 deploy/deaddropd.service /etc/systemd/system/deaddropd.service
 sudo systemctl enable --now deaddropd
-sudo journalctl -u deaddropd                  # the first start prints the link and QR code
+sudo journalctl -u deaddropd -o cat           # the first start prints the link and QR code
 ```
 
 The unit file runs the server as its own user with access to nothing but

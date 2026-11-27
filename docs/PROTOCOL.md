@@ -320,7 +320,11 @@ cannot be reached the app waits longer between tries, up to a minute.
 
 ## 10. On the phone
 
-- Message history in an encrypted database; the database key is protected by the Keystore.
+- Message history is one database, encrypted as a whole (SQLCipher), so the file shows
+  nothing without its key: not the messages, who wrote them, when, or how many there
+  are. The database has its own random key, stored sealed by a Keystore key and held in
+  the app's memory only while the app runs. Deleted rows are overwritten.
+- Engine state (keys and ratchets) is a file per server, sealed directly by the Keystore key.
 - Later: disappearing messages (a timer per channel), screen lock for the app.
 
 ## 11. Later: audio, pictures, video
@@ -369,20 +373,22 @@ code, link or typed address (with the fingerprint check of §2), channels, conve
 invites as links and QR codes, join requests, members, names, safety numbers, maximum
 message age, the operator's controls and device list, and receiving in the background
 with notifications (§9). Each server gets its own identity in the Android Keystore;
-engine state and message history are stored encrypted with a Keystore key. The screens
+engine state is stored encrypted with a Keystore key, and message history in an
+encrypted database (§10). The screens
 have been driven on an emulator against real servers, with the command-line client as
-the other people. **Nothing has run on a real phone yet**, and reading a QR code through
-a real camera is untried (the reading itself is tested on pictures of the app's own
-screens and of the server's terminal output).
+the other people. Version 0.1.0 has also run on one real phone, as the operator of a
+real server (27 November 2026). **Two real phones in one channel is still untried.**
 
 **Running a server:** a container, a compose file, a systemd unit and a set-up script are
 in `deploy/` (`docs/DEPLOYMENT.md`). The container has been built and run. The systemd
 unit runs a real server, and fail2ban there reads and matches the server's lines; an
 actual ban has not been triggered.
 
-Not built yet:
-- Blocking a person and reporting, which the Play Store expects (`docs/PLAY_STORE.md`).
-- A proper message database (history is one encrypted file per server), disappearing
-  messages and an app lock (§10).
-- An icon and store graphics.
+Not built yet (`docs/TODO.md` has the full list):
+- Disappearing messages and an app lock (§10).
+- Store graphics.
 - Everything in §11.
+
+Decided against (27 November 2026): blocking a person and reporting. Servers are private
+and run by the people who use them; a member can leave a channel and an owner can remove
+a member.

@@ -16,9 +16,9 @@ Re-check them whenever the app changes.
 | 👤 | **Back up the signing key** (§6) | Created 27 November 2026. Back it up |
 | 👤 | A contact address | Decided 27 November 2026: there is none, and the website points to GitHub issues. Google Play requires a contact email on every listing, so one is needed before the app goes there |
 | ✅ | Website at `decentralizeddeaddrop.com` with the privacy policy | Live since 27 November 2026 (`site/`) |
-| ⬜ | App icon, feature graphic, screenshots | Not made. The icon in the app is a placeholder |
-| ⬜ | A way to block someone and to report a channel (§7) | Not built; Play expects it of apps where people exchange content |
-| ⬜ | Tried on real phones | Only the emulator so far |
+| ⬜ | Store icon (512 × 512), feature graphic, screenshots | The app has its icon (the drawing is `docs/design/icon-concepts-blue-grey-2026-11-27/sealed-conversation.svg`); the store pictures are not made |
+| ➖ | A way to block someone and to report a channel (§7) | Decided against, 27 November 2026. Play expects it of apps where people exchange content, so its review may object |
+| ⬜ | Tried on real phones | One phone, as the operator of a real server. Two phones together still to try |
 | 👤 | Recruit **12+ testers** (Android, Google account) for the closed test | To do |
 
 ## 2. Create the app 👤
@@ -150,8 +150,7 @@ Created 27 November 2026: `C:\Users\Edward\.deaddrop\upload-keystore.jks` (outsi
 
 ## 7. Before production
 
-- **Blocking and reporting.** Play's policy for apps where people exchange content expects a way to block a person and to report content. Today a member can leave a channel and an owner can remove a member; there is no "hide this person's messages" and no report. Because servers are run by their users, a report has nowhere central to go: the honest design is probably "hide this member on my phone" plus "tell the channel's owner / the person who runs the server". To be designed.
+- **Blocking and reporting.** Play's policy for apps where people exchange content expects a way to block a person and to report content. Decided 27 November 2026: this app will have neither. Servers are private and run by the people who use them; a member can leave a channel and an owner can remove a member. Expect Google's review to raise it.
 - Real-phone checks: scanning QR codes with a real camera, staying connected with the screen off on mobile data, battery settings on Samsung and Xiaomi phones, a restart.
-- The website, with the privacy policy.
-- An icon and the store graphics.
+- The store graphics.
 - An independent look at the cryptography would be worth having before telling anyone to rely on it.

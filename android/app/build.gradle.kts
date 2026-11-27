@@ -14,8 +14,8 @@ android {
         // Android 12+: hardware-backed key agreement keys, as in Pocket Radio.
         minSdk = 31
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         // The engine (Rust) is built for phones and for the emulator: see build-engine.sh.
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -62,6 +62,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation("${libs.jna.get()}@aar")
     implementation(libs.zxing.core)
+    implementation(libs.sqlcipher)
+    implementation(libs.androidx.sqlite)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)

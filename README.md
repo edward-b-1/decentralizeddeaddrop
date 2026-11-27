@@ -6,10 +6,12 @@ A text messenger where every community runs its own server. The server is a dead
 holds sealed messages only until they have been collected, and can never read them.
 
 **Status: early development.** The server, the encryption and the Android app exist
-and work together on an emulator; nothing has run on a real phone yet. It has had no
-independent security review. Do not rely on it yet.
+and work together. Version 0.1.0 runs on one real phone against a real server; two
+phones talking to each other is still untried. It has had no independent security
+review. Do not rely on it yet.
 
 - `docs/PROTOCOL.md`: the design, and what is and is not built.
+- `docs/TODO.md`: what is left to do, and what has been decided against.
 - `docs/DEPLOYMENT.md`: running your own server (files in `deploy/`).
 - `docs/PLAY_STORE.md`: what a Play Store release needs.
 - `site/`: the website, decentralizeddeaddrop.com, and how a version of the app is released.

@@ -31,7 +31,7 @@ ANDROID_PUBLISHERS = {
     "com.google.guava": "Apache-2.0", "org.jspecify": "Apache-2.0", "com.google.errorprone": "Apache-2.0",
     "com.google.auto.value": "Apache-2.0", "com.google.code.findbugs": "Apache-2.0", "com.google.dagger": "Apache-2.0",
     "com.google.j2objc": "Apache-2.0", "jakarta.inject": "Apache-2.0", "javax.inject": "Apache-2.0",
-    "org.checkerframework": "MIT",
+    "org.checkerframework": "MIT", "net.zetetic": "BSD-3-Clause",
 }
 CHECKER_MIT = """Checker Framework qualifiers
 Copyright 2004-present by the Checker Framework developers
@@ -144,6 +144,10 @@ def main():
 
     if any(library.startswith("org.checkerframework") for library, _ in android):
         by_text["checker"] = (CHECKER_MIT, ["org.checkerframework:checker-qual"])
+    if any(library.startswith("net.zetetic") for library, _ in android):
+        # Its licence, kept beside this script, with a note of what it is built on.
+        zetetic = open(os.path.join(ROOT, "tools", "licences", "sqlcipher-android.txt"), encoding="utf-8").read().strip()
+        by_text["sqlcipher"] = (zetetic, ["net.zetetic:sqlcipher-android"])
     apache = [library for library, licence in android if licence == "Apache-2.0"]
     for text, users in by_text.values():
         if text.lstrip().startswith("Apache License") and "Version 2.0" in text[:200]:

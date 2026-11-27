@@ -10,3 +10,6 @@
 -dontwarn java.awt.**
 
 # CameraX and ZXing ship their own rules.
+
+# SQLCipher (message history) is called from its own native code.
+-keep class net.zetetic.** { *; }

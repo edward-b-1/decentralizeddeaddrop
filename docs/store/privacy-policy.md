@@ -17,8 +17,8 @@ add to it, which are run by you or by people you know, not by us.
 - Your identity keys, in the phone's secure hardware. They never leave it.
 - For each server you add: its address and fingerprint, your channels, their members'
   names, your message history, and the everyday keys that seal and open messages. These
-  are stored encrypted with a key held in the
-  phone's secure hardware, and are left out of phone backups.
+  are stored encrypted, protected by a key held in the phone's secure hardware, and are
+  left out of phone backups.
 - Two settings: whether to stay connected in the background, and whether notifications
   show message text.
 

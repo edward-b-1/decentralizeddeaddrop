@@ -71,6 +71,8 @@ data class ServerUi(
 )
 
 data class MessageUi(
+    /** Its place in this phone's history. 0 until it has been stored. */
+    val id: Long = 0,
     val mine: Boolean,
     val name: String,
     val text: String,
@@ -92,7 +94,11 @@ object Servers {
     /** Message history by [ChannelUi.key]. Kept on this phone only. */
     val messages = MutableStateFlow<Map<String, List<MessageUi>>>(emptyMap())
 
-    private class History(var unread: Int = 0, val messages: MutableList<MessageUi> = mutableListOf())
+    /** The channels ([ChannelUi.key]) that have older messages than the ones in [messages]. */
+    val earlier = MutableStateFlow<Set<String>>(emptySet())
+
+    /** A channel's messages as far back as they have been read in; [earlier] says the database holds older ones. */
+    private class History(var unread: Int = 0, val messages: MutableList<MessageUi> = mutableListOf(), @Volatile var earlier: Boolean = false)
 
     private class Entry(val slot: Int, var label: String, val keys: DeviceKeys, val session: Session, val store: Store) {
         @Volatile var connection = Connection.Reconnecting
@@ -122,6 +128,9 @@ object Servers {
     private val entries = ConcurrentHashMap<Int, Entry>()
     private lateinit var vault: Vault
     private lateinit var app: Context
+
+    /** Message history. Opened the first time it is needed, which is never on the main thread. */
+    private val db: MessageDb by lazy { MessageDb(File(app.filesDir, "vault"), vault) }
 
     /** True once the servers stored on this phone have been read back in. */
     val loaded = MutableStateFlow(false)
@@ -209,18 +218,23 @@ object Servers {
         }
         servers.value = shown
         messages.value = entries.values.flatMap { entry ->
-            entry.history.map { (channel, history) -> "${entry.slot}/$channel" to history.messages.toList() }
+            entry.history.map { (channel, history) -> "${entry.slot}/$channel" to synchronized(history) { history.messages.toList() } }
         }.toMap()
+        earlier.value = entries.values.flatMap { entry ->
+            entry.history.filterValues { it.earlier }.keys.map { "${entry.slot}/$it" }
+        }.toSet()
     }
 
     private fun record(entry: Entry, channel: String, message: MessageUi) {
         val history = entry.history.getOrPut(channel) { History() }
         synchronized(history) {
-            history.messages += message
+            history.messages += db.add(entry.slot, channel, message)
             // Read at once only if its channel is on screen and the screen is being looked at.
-            if (!message.mine && (open != "${entry.slot}/$channel" || !Notifier.appVisible)) history.unread += 1
+            if (!message.mine && (open != "${entry.slot}/$channel" || !Notifier.appVisible)) {
+                history.unread += 1
+                db.setUnread(entry.slot, channel, history.unread)
+            }
         }
-        saveHistory(entry)
     }
 
     fun markRead(key: String) {
@@ -231,48 +245,35 @@ object Servers {
         if (history.unread == 0) return
         history.unread = 0
         thread {
-            saveHistory(entry)
+            db.setUnread(slot, channel, 0)
             publish()
         }
     }
 
-    private fun saveHistory(entry: Entry) {
-        val channels = JSONObject()
-        for ((channel, history) in entry.history) {
-            synchronized(history) {
-                channels.put(
-                    channel,
-                    JSONObject().put("unread", history.unread).put(
-                        "messages",
-                        JSONArray(history.messages.map {
-                            JSONObject().put("mine", it.mine).put("name", it.name).put("text", it.text)
-                                .put("sent", it.sent).put("unreadable", it.unreadable)
-                        }),
-                    ),
-                )
-            }
+    private fun loadHistory(entry: Entry) {
+        // Versions up to 0.1.0 kept a server's whole history in one file: take it in, once.
+        vault.read(historyFile(entry.slot))?.let { old ->
+            if (runCatching { db.takeOld(entry.slot, JSONObject(String(old))) }.isSuccess) vault.delete(historyFile(entry.slot))
         }
-        vault.write(historyFile(entry.slot), channels.toString().toByteArray())
+        for ((channel, unread) in db.channels(entry.slot)) {
+            entry.history[channel] = History(unread).also { read(entry.slot, channel, it) }
+        }
     }
 
-    private fun loadHistory(entry: Entry) {
-        val channels = vault.read(historyFile(entry.slot))?.let { JSONObject(String(it)) } ?: return
-        for (channel in channels.keys()) {
-            val saved = channels.getJSONObject(channel)
-            val list = saved.getJSONArray("messages")
-            val history = History(unread = saved.getInt("unread"))
-            for (index in 0 until list.length()) {
-                val message = list.getJSONObject(index)
-                history.messages += MessageUi(
-                    mine = message.getBoolean("mine"),
-                    name = message.getString("name"),
-                    text = message.getString("text"),
-                    sent = message.getLong("sent"),
-                    unreadable = message.optBoolean("unreadable"),
-                )
-            }
-            entry.history[channel] = history
-        }
+    /** Puts the page of messages before the ones already in memory at the front of them. */
+    private fun read(slot: Int, channel: String, history: History) = synchronized(history) {
+        val before = history.messages.firstOrNull()?.id ?: Long.MAX_VALUE
+        val page = db.page(slot, channel, before, PAGE + 1)
+        history.earlier = page.size > PAGE
+        history.messages.addAll(0, page.takeLast(PAGE))
+    }
+
+    /** Brings the next page of a channel's older messages into [messages]. */
+    suspend fun loadEarlier(key: String) = withContext(Dispatchers.IO) {
+        val (slot, channel) = key.split("/", limit = 2).let { it[0].toInt() to it[1] }
+        val history = entries[slot]?.history?.get(channel) ?: return@withContext
+        read(slot, channel, history)
+        publish()
     }
 
     private fun saveRegistry() {
@@ -435,6 +436,7 @@ object Servers {
         entry.keys.destroy()
         vault.delete(stateFile(slot))
         vault.delete(historyFile(slot))
+        db.forgetServer(slot)
         saveRegistry()
         publish()
     }
@@ -487,7 +489,7 @@ object Servers {
     private fun forgetHistory(slot: Int, channel: String) {
         val entry = entry(slot)
         entry.history.remove(channel)
-        saveHistory(entry)
+        db.forgetChannel(slot, channel)
     }
 
     /** Sends a message. It appears in the conversation at once; the engine keeps it safe until the server has it. */
@@ -516,6 +518,9 @@ object Servers {
     }
 
     private const val REGISTRY = "servers"
+
+    /** How many of a channel's messages are read in at a time. */
+    private const val PAGE = 200
     private const val FIRST_RETRY_MS = 5_000L
     private const val LONGEST_RETRY_MS = 60_000L
 }

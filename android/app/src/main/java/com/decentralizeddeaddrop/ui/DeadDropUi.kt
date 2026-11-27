@@ -329,7 +329,7 @@ private fun SettingsTab(go: (Screen) -> Unit) {
         Note("Dead Drop uses no push service, so nothing about your messages passes through Google. The cost is a little battery for each server it stays connected to.")
         Heading("About")
         Item("Decentralized Dead Drop", detail = "Secure communication systems.")
-        Item("Version", value = "0.1.0")
+        Item("Version", value = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty() })
         Item("Licences", detail = "This app's licence, and the software it is built on", onClick = { go(Screen.Licences) })
         Note("Messages are sealed on this phone and can be opened only by the members of a channel. Servers hold them only until they are delivered or too old, and can never read them.")
         Note("This is an early version. It has had no independent security review.")

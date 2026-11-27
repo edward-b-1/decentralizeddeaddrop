@@ -1,5 +1,7 @@
 package com.decentralizeddeaddrop.ui
 
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -64,6 +66,9 @@ import com.decentralizeddeaddrop.engine.readLink
 fun ConversationScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, go: (Screen) -> Unit) {
     val all by Servers.messages.collectAsStateWithLifecycle()
     val messages = all[channel.key].orEmpty()
+    val earlier by Servers.earlier.collectAsStateWithLifecycle()
+    val hasEarlier = channel.key in earlier
+    val scope = rememberCoroutineScope()
     val runner = rememberRunner()
     var draft by rememberSaveable(channel.key) { mutableStateOf("") }
     val list = rememberLazyListState()
@@ -73,9 +78,10 @@ fun ConversationScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, 
         Servers.open = channel.key
         onDispose { Servers.open = null }
     }
-    LaunchedEffect(messages.size) {
+    // Follows the newest message. Bringing in earlier ones leaves the view where it was.
+    LaunchedEffect(messages.lastOrNull()?.id) {
         Servers.markRead(channel.key)
-        if (messages.isNotEmpty()) list.animateScrollToItem(messages.lastIndex + 1)
+        if (messages.isNotEmpty()) list.animateScrollToItem(messages.lastIndex + if (hasEarlier) 2 else 1)
     }
 
     val present = channel.members.count { !it.hasLeft }
@@ -124,7 +130,21 @@ fun ConversationScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, 
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            items(messages) { message -> Bubble(message) }
+            if (hasEarlier) {
+                item(key = "earlier") {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        TextButton(onClick = {
+                            scope.launch {
+                                // Put the oldest message at the very top first: the list holds on to
+                                // whatever is first on screen while earlier ones are added above it.
+                                list.scrollToItem(2)
+                                Servers.loadEarlier(channel.key)
+                            }
+                        }) { Text("Show earlier messages") }
+                    }
+                }
+            }
+            items(messages, key = { it.id }) { message -> Bubble(message) }
             item { Box(Modifier.size(4.dp)) }
         }
     }

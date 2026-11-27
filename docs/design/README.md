@@ -12,6 +12,10 @@ App mockup A is the design for the first version, except that there is **no deli
 under messages** (screen 2 shows "Delivered to everyone" and "Waiting for Gran and
 Alex"). Decided 2026-11-26: no delivery reports and no read receipts.
 
+**The icon is "sealed conversation"** (chosen 2026-11-27), from the pictures in
+`icon-concepts-blue-grey-2026-11-27/`. Its clean drawing, which the app and the website
+use, is `sealed-conversation.svg` in that folder.
+
 **Website mockup B is the chosen design** (decided 2026-11-27). In the mockups the pages
 share one file and a small script switches between them; the real site is to be plain
 pages with no script, no cookies and its fonts served from the site itself. Details with
