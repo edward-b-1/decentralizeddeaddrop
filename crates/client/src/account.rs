@@ -5,7 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use deaddrop_core::encoding::{b64, random_id, unb64};
 use deaddrop_core::keys;
-use deaddrop_core::records::{ChannelRecord, Roster, RosterMember, Signed, SignedKey, open_messaging_keys};
+use deaddrop_core::records::{
+    ChannelRecord, Leave, Roster, RosterMember, Signed, SignedKey, open_leave, open_messaging_keys,
+};
 use deaddrop_crypto::{Error as CryptoError, Incoming, Messenger};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -59,8 +61,19 @@ pub struct Channel {
     pub roster_version: u64,
     /// Everyone in the owner's signed roster.
     pub members: Vec<RosterMember>,
-    /// Members who have left since the roster was signed.
+    /// Members no longer taking part, though the roster still lists them: everyone in
+    /// `confirmed` and `missing`, and anyone the server says has left. Nothing is sent
+    /// to them. Apart from `confirmed`, this is only the server's word, so it is
+    /// something to show and never a reason to sign anyone out.
     pub left: Vec<String>,
+    /// Those who have left by their own signed word, which this device has checked.
+    /// The owner's phone signs a roster without them the next time it is in touch.
+    #[serde(default)]
+    pub confirmed: Vec<String>,
+    /// Those whose device the server no longer has (they took the server off their
+    /// phone, or its operator removed them, or the server is hiding them).
+    #[serde(default)]
+    pub missing: Vec<String>,
 }
 
 impl Channel {
@@ -467,7 +480,7 @@ impl Account {
             version: 1,
             issued: now(),
         };
-        let members = vec![RosterMember { device: self.device.clone(), name: my_name.to_owned() }];
+        let members = vec![RosterMember { device: self.device.clone(), name: my_name.to_owned(), since: 1 }];
         let roster = Roster { v: 1, channel: id.clone(), version: 1, members: members.clone(), issued: now() };
         let body = json!({
             "channel": Signed::seal(&record, |message| keys.sign(message)),
@@ -486,6 +499,8 @@ impl Account {
                 roster_version: 1,
                 members,
                 left: Vec::new(),
+                confirmed: Vec::new(),
+                missing: Vec::new(),
             },
         );
         Ok(id)
@@ -564,8 +579,13 @@ impl Account {
         let requests = self.join_requests(keys, channel)?;
         let request = requests.into_iter().find(|request| request.device == device);
         let request = request.ok_or(ClientError::Refused { status: 404, message: "no such request".into() })?;
-        let mut members = self.owned(channel)?.members.clone();
-        members.push(RosterMember { device: request.device, name: request.name });
+        let current = self.owned(channel)?;
+        // They are a member from the roster this makes. If they were in the channel
+        // before and are still listed, this entry takes the old one's place.
+        let since = current.roster_version + 1;
+        let mut members = current.members.clone();
+        members.retain(|member| member.device != request.device);
+        members.push(RosterMember { device: request.device, name: request.name, since });
         self.publish_roster(keys, channel, members)
     }
 
@@ -583,8 +603,9 @@ impl Account {
         mut members: Vec<RosterMember>,
     ) -> Result<(), ClientError> {
         let current = self.owned(channel)?.clone();
-        // Anyone who has left is dropped from the signed list at the same time.
-        members.retain(|member| !current.left.contains(&member.device));
+        // Anyone who has left, by their own signed word, is dropped from the signed
+        // list at the same time. Nobody is dropped on the server's word alone.
+        members.retain(|member| !current.confirmed.contains(&member.device));
         let roster =
             Roster { v: 1, channel: channel.to_owned(), version: current.roster_version + 1, members, issued: now() };
         let body = json!({ "roster": Signed::seal(&roster, |message| keys.sign(message)) });
@@ -683,13 +704,26 @@ impl Account {
     }
 
     /// Leaves a channel, forgetting every key held for it.
+    ///
+    /// The server is given this device's signed word that it is leaving, which is what
+    /// lets the owner's phone take it off the member list without the owner being asked.
     pub fn leave(&mut self, keys: &dyn DeviceKeys, channel: &str) -> Result<(), ClientError> {
-        if !self.channels.contains_key(channel) {
-            return Err(ClientError::UnknownChannel);
-        }
-        self.request(keys, Method::DELETE, &format!("/v1/channels/{channel}/members/me"), None)?;
+        let held = self.channels.get(channel).ok_or(ClientError::UnknownChannel)?;
+        let body = json!({ "leave": self.signed_leave(keys, held) });
+        self.request(keys, Method::DELETE, &format!("/v1/channels/{channel}/members/me"), Some(body))?;
         self.forget(channel);
         Ok(())
+    }
+
+    fn signed_leave(&self, keys: &dyn DeviceKeys, channel: &Channel) -> Signed {
+        let leave = Leave {
+            v: 1,
+            channel: channel.id.clone(),
+            device: self.device.clone(),
+            roster: channel.roster_version,
+            issued: now(),
+        };
+        Signed::seal(&leave, |message| keys.sign(message))
     }
 
     /// Deletes a channel for everyone. Owner only.
@@ -702,8 +736,13 @@ impl Account {
 
     /// Takes this device off the server: its memberships, anything waiting for it, and
     /// every channel it owns are deleted there. The account is of no use afterwards.
+    ///
+    /// For each channel it is in and does not own, it leaves its signed word that it
+    /// has left, so that those channels' owners need not take the server's.
     pub fn leave_server(&mut self, keys: &dyn DeviceKeys) -> Result<(), ClientError> {
-        self.request(keys, Method::DELETE, "/v1/devices/me", None)?;
+        let others = self.channels.values().filter(|channel| channel.owner != self.device);
+        let leaves: Vec<Signed> = others.map(|channel| self.signed_leave(keys, channel)).collect();
+        self.request(keys, Method::DELETE, "/v1/devices/me", Some(json!({ "leaves": leaves })))?;
         Ok(())
     }
 
@@ -746,6 +785,11 @@ impl Account {
     /// Nothing is taken on trust: the record and the roster must be signed by `owner`
     /// and never older than what is already held, and each member's messaging keys must
     /// be signed by the key their device ID in the roster is the hash of.
+    ///
+    /// Who has left is the one thing here the server says unsigned. It is believed far
+    /// enough to stop sending to them (a server that lies about it gains nothing: it
+    /// could simply not deliver), and no further. Only a member's own signed leave,
+    /// checked here, counts as them having gone.
     fn refresh_channel(&mut self, keys: &dyn DeviceKeys, channel: &str, owner: &str) -> Result<bool, ClientError> {
         let before = self.channels.get(channel).cloned();
         let (record, owner_key) = self.verified_record(keys, channel, owner)?;
@@ -768,22 +812,38 @@ impl Account {
             .iter()
             .filter_map(|id| id.as_str().map(str::to_owned))
             .collect();
+        let (mut confirmed, mut missing) = (Vec::new(), Vec::new());
+        let leaves = view["leaves"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let entries = view["keys"].as_array().map(Vec::as_slice).unwrap_or_default();
 
         let mut active = Vec::new();
         for member in &roster.members {
-            if left.contains(&member.device) {
-                continue;
-            }
             if member.device == self.device {
                 active.push(member.device.clone());
                 continue;
             }
-            let entries = view["keys"].as_array().map(Vec::as_slice).unwrap_or_default();
+            // Their own signed word that they have left, if the server holds one. The
+            // owner cannot leave, so one in the owner's name is not looked at.
+            let leave = leaves.iter().find(|leave| leave["device_id"] == member.device.as_str());
+            let gone = member.device != owner
+                && leave.is_some_and(|leave| {
+                    let key = leave["signing_key"].as_str().and_then(unb64);
+                    let signed = serde_json::from_value::<Signed>(leave["leave"].clone()).ok();
+                    key.zip(signed).is_some_and(|(key, signed)| open_leave(channel, member, &key, &signed).is_ok())
+                });
+            if gone {
+                confirmed.push(member.device.clone());
+                if !left.contains(&member.device) {
+                    left.push(member.device.clone());
+                }
+            }
+            if left.contains(&member.device) {
+                continue;
+            }
             let Some(entry) = entries.iter().find(|entry| entry["device_id"] == member.device.as_str()) else {
-                // Their device is gone from the server altogether (they took the server
-                // off their phone, or its operator removed them). That counts as having
-                // left. A server that hides a member this way gains nothing: it could
-                // simply not deliver to them.
+                // The server has no such device any more: they took the server off
+                // their phone, or its operator removed them, or it is hiding them.
+                missing.push(member.device.clone());
                 left.push(member.device.clone());
                 continue;
             };
@@ -810,6 +870,8 @@ impl Account {
             roster_version: roster.version,
             members: roster.members,
             left,
+            confirmed,
+            missing,
         };
         let changed = before.as_ref() != Some(&after);
         self.channels.insert(channel.to_owned(), after);
@@ -834,8 +896,12 @@ impl Account {
             // A channel nobody invited this device to cannot be checked, so it is ignored.
             let Some(owner) = owner else { continue };
             changed |= self.refresh_channel(keys, channel, &owner)?;
-            // The owner's phone then signs a member list without anyone who has left.
-            let held = self.channels.get(channel).filter(|held| held.owner == self.device && !held.left.is_empty());
+            // The owner's phone then signs a member list without anyone who has left
+            // by their own signed word. A member the server only says has left, or
+            // whose device it no longer shows, stays in the list until the owner
+            // removes them: what the server says is never what gets someone signed out.
+            let held =
+                self.channels.get(channel).filter(|held| held.owner == self.device && !held.confirmed.is_empty());
             if let Some(members) = held.map(|held| held.members.clone()) {
                 self.publish_roster(keys, channel, members)?;
                 changed = true;

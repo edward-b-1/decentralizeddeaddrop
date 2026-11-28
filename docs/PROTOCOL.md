@@ -158,12 +158,28 @@ up). Every change of membership is a new roster. Phones never accept an older on
   member who wants a new name sends the request as an ordinary sealed message of its own
   kind; the owner's phone, on collecting it, signs a roster with the new name if it is
   free. The server sees a message like any other.
-- When a member leaves, the server stops delivering to them at once and tells the others;
-  the owner's phone signs a roster without them the next time it is in touch.
-- A member whose device is deleted from the server (they took the server off their phone,
-  or the operator removed the device) counts as having left. Taking a server off a phone
-  deletes the device there, so nothing goes on waiting for a phone that will never
-  collect it; the channels that device owned go with it.
+- **The server cannot get a member dropped.** A member who leaves signs a short record
+  saying so (a *leave*: the channel, their device ID, and the roster version they held),
+  with the same signing key their device ID is the hash of. The server stops delivering
+  to them at once, keeps the leave, and hands it to the others. The owner's phone checks
+  it and signs a roster without them the next time it is in touch. That is the only
+  thing that makes the owner's phone sign anyone out unasked.
+- What the server merely *says* (that someone has left, or that their device no longer
+  exists) is shown and is never signed for. Phones stop sending to such a member, which
+  costs nothing: a server could withhold delivery anyway. The member stays in the roster
+  until the owner removes them by hand, and is back as they were if the server's story
+  changes. A phone from version 0.1.1 or earlier signs no leave, so its leaving is of
+  this kind.
+- Each roster entry records the roster version that let that member in. A leave signed
+  before then is ignored, so a server cannot keep the leave of someone who left and came
+  back and play it again.
+- Taking a server off a phone deletes the device there, so nothing goes on waiting for a
+  phone that will never collect it; the channels that device owned go with it. For every
+  other channel it was in, it hands over a signed leave on the way out, which the server
+  keeps (with the signing key needed to check it) until the owner's roster drops the
+  member.
+- A device the operator removes signs nothing, so to a channel's owner it is "no longer
+  on this server": theirs to remove from the roster, or not.
 
 ## 6. Message encryption
 

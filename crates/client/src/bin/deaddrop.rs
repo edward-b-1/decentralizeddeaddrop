@@ -157,7 +157,15 @@ fn status(account: &Account) {
         println!("\n{} ({}{role})", channel.name, channel.id);
         println!("  maximum message age: {} seconds", channel.max_age);
         for member in &channel.members {
-            let gone = if channel.left.contains(&member.device) { " (has left)" } else { "" };
+            let gone = if channel.confirmed.contains(&member.device) {
+                " (has left)"
+            } else if channel.missing.contains(&member.device) {
+                " (no longer on this server; `remove` takes them off the list)"
+            } else if channel.left.contains(&member.device) {
+                " (the server says they have left; `remove` takes them off the list)"
+            } else {
+                ""
+            };
             println!("  {} {}{gone}", member.device, member.name);
         }
     }

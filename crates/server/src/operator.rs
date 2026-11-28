@@ -174,7 +174,7 @@ pub async fn remove(State(state): State<AppState>, auth: Auth, Path(device): Pat
     if device == auth.device {
         return Err(ApiError::conflict("to remove yourself, delete your own device"));
     }
-    let affected = state.store.run(move |db| auth::delete_device(db, &device)).await?;
+    let affected = state.store.run(move |db| auth::delete_device(db, &device, &[])).await?;
     state.wake_all(&affected, Wake::Changed);
     Ok(StatusCode::NO_CONTENT)
 }

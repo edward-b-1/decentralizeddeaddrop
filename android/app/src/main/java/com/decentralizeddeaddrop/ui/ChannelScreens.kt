@@ -276,8 +276,14 @@ fun MembersScreen(channel: ChannelUi, back: () -> Unit, go: (Screen) -> Unit) {
     val runner = rememberRunner()
     var removing by remember { mutableStateOf<String?>(null) }
     removing?.let { device ->
-        val name = channel.members.firstOrNull { it.device == device }?.name ?: device
-        Confirm("Remove $name?", "They stop receiving messages at once, and cannot read anything sent from now on.", "Remove", onNo = { removing = null }, onYes = {
+        val member = channel.members.firstOrNull { it.device == device }
+        val name = member?.name ?: device
+        val effect = when {
+            member?.missing == true -> "The server no longer has their phone. This takes them off the member list. To come back they would need a new invite."
+            member?.hasLeft == true -> "The server says they have left, but their phone did not confirm it. This takes them off the member list. To come back they would need a new invite."
+            else -> "They stop receiving messages at once, and cannot read anything sent from now on."
+        }
+        Confirm("Remove $name?", effect, "Remove", onNo = { removing = null }, onYes = {
             removing = null
             runner.run { Servers.removeMember(channel.slot, channel.id, device) }
         })
@@ -290,12 +296,20 @@ fun MembersScreen(channel: ChannelUi, back: () -> Unit, go: (Screen) -> Unit) {
                 detail = listOfNotNull(
                     "You".takeIf { member.isMe },
                     "Owner".takeIf { member.device == channel.owner },
-                    "Has left".takeIf { member.hasLeft },
+                    when {
+                        member.leftConfirmed -> "Has left"
+                        member.missing -> "No longer on this server"
+                        member.hasLeft -> "Left, not confirmed"
+                        else -> null
+                    },
                     "Safety number checked".takeIf { member.verified },
                 ).joinToString(" · ").ifEmpty { null },
                 onClick = if (member.isMe || member.hasLeft) null else ({ go(Screen.Safety(channel.key, member.device)) }),
                 end = {
-                    if (channel.ownedByMe && member.device != channel.owner && !member.hasLeft) {
+                    // Someone who has left by their own signed word goes off the list by
+                    // itself. Anyone else stays until the owner removes them: the server
+                    // saying they have gone is not enough to sign them out.
+                    if (channel.ownedByMe && member.device != channel.owner && !member.leftConfirmed) {
                         TextButton(onClick = { removing = member.device }, enabled = !runner.busy) {
                             Text("Remove", color = MaterialTheme.colorScheme.error)
                         }

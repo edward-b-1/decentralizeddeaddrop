@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use common::*;
 use deaddrop_core::encoding::{random_id, unb64};
 use deaddrop_core::keys;
-use deaddrop_core::records::{ChannelRecord, Roster, Signed};
+use deaddrop_core::records::{ChannelRecord, Leave, Roster, RosterMember, Signed, open_leave};
 use serde_json::json;
 
 #[tokio::test]
@@ -168,27 +168,106 @@ async fn the_owner_can_decline_a_request() {
     assert_eq!(mine["requests"], json!([]));
 }
 
+/// What a phone signs to say it is leaving a channel.
+fn leave_of(phone: &Phone, channel: &str) -> Leave {
+    Leave { v: 1, channel: channel.to_owned(), device: phone.id.clone(), roster: 2, issued: 1_800_000_000 }
+}
+
 #[tokio::test]
-async fn a_member_who_leaves_must_be_dropped_from_the_next_roster() {
+async fn a_member_who_leaves_signs_for_it_and_whether_to_drop_them_is_the_owners_decision() {
+    let server = Server::new().await;
+    let (owner, member, other) = (server.phone().await, server.phone().await, server.phone().await);
+    let channel = server.channel_with(&owner, 3600, &[(&member, "Member")]).await;
+    let elsewhere = server.channel(&owner, 3600).await;
+    let path = format!("/v1/channels/{channel}/members/me");
+    let (server_ref, path_ref, member_ref) = (&server, &path, &member);
+    let leave = |signed: Signed| async move {
+        server_ref.as_phone(member_ref, DELETE, path_ref, Some(json!({ "leave": signed }))).await.0
+    };
+
+    assert_eq!(server.as_phone(&owner, DELETE, &path, None).await.0, StatusCode::CONFLICT, "the owner cannot leave");
+    // What is kept has to be the leaver's own signed word about this channel.
+    assert_eq!(leave(owner.device.seal(&leave_of(&member, &channel))).await, StatusCode::BAD_REQUEST);
+    assert_eq!(leave(member.device.seal(&leave_of(&owner, &channel))).await, StatusCode::BAD_REQUEST);
+    assert_eq!(leave(member.device.seal(&leave_of(&member, &elsewhere))).await, StatusCode::BAD_REQUEST);
+    assert_eq!(server.as_phone(&member, DELETE, &path, Some(json!({ "leave": 7 }))).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(server.rows("leaves").await, 0);
+
+    assert_eq!(leave(member.device.seal(&leave_of(&member, &channel))).await, StatusCode::NO_CONTENT);
+    assert_eq!(server.as_phone(&member, DELETE, &path, None).await.0, StatusCode::NOT_FOUND);
+
+    // Remaining members are told who has left, and handed what the leaver signed so
+    // that they can check it for themselves.
+    let members = format!("/v1/channels/{channel}/members");
+    let (_, view) = server.as_phone(&owner, GET, &members, None).await;
+    assert_eq!(view["left"], json!([member.id]));
+    assert_eq!(view["leaves"][0]["device_id"], json!(member.id));
+    let key = unb64(view["leaves"][0]["signing_key"].as_str().unwrap()).unwrap();
+    let signed: Signed = serde_json::from_value(view["leaves"][0]["leave"].clone()).unwrap();
+    let listed = RosterMember { device: member.id.clone(), name: "Member".into(), since: 2 };
+    assert!(open_leave(&channel, &listed, &key, &signed).is_ok());
+
+    // The owner may keep them in the list. That does not start delivery to them again.
+    let both = roster(&channel, 3, &[(&owner, "Owner"), (&member, "Member")]);
+    assert_eq!(server.put_roster(&owner, &channel, &both).await.0, StatusCode::NO_CONTENT);
+    let (_, view) = server.as_phone(&owner, GET, &members, None).await;
+    assert_eq!((&view["left"], view["leaves"].as_array().unwrap().len()), (&json!([member.id]), 1));
+    assert_eq!(server.send(&owner, &channel, "anyone?").await.1["recipients"], json!(0));
+
+    // Nobody new gets in that way: a list may hold those in the last one and those who asked.
+    let stranger = roster(&channel, 4, &[(&owner, "Owner"), (&member, "Member"), (&other, "Other")]);
+    assert_eq!(server.put_roster(&owner, &channel, &stranger).await.0, StatusCode::CONFLICT);
+
+    // Dropping them works, and what they signed has then done its job.
+    let alone = roster(&channel, 4, &[(&owner, "Owner")]);
+    assert_eq!(server.put_roster(&owner, &channel, &alone).await.0, StatusCode::NO_CONTENT);
+    assert_eq!((server.rows("members").await, server.rows("leaves").await), (2, 0));
+}
+
+#[tokio::test]
+async fn a_phone_from_before_signed_leaves_can_still_leave() {
     let server = Server::new().await;
     let (owner, member) = (server.phone().await, server.phone().await);
     let channel = server.channel_with(&owner, 3600, &[(&member, "Member")]).await;
-    let leave = format!("/v1/channels/{channel}/members/me");
 
-    assert_eq!(server.as_phone(&owner, DELETE, &leave, None).await.0, StatusCode::CONFLICT, "the owner cannot leave");
-    assert_eq!(server.as_phone(&member, DELETE, &leave, None).await.0, StatusCode::NO_CONTENT);
-    assert_eq!(server.as_phone(&member, DELETE, &leave, None).await.0, StatusCode::NOT_FOUND);
-
-    // Remaining members are told who has left since the roster was signed.
+    // Versions up to 0.1.1 send nothing with the request.
+    let path = format!("/v1/channels/{channel}/members/me");
+    assert_eq!(server.as_phone(&member, DELETE, &path, None).await.0, StatusCode::NO_CONTENT);
     let (_, view) = server.as_phone(&owner, GET, &format!("/v1/channels/{channel}/members"), None).await;
-    assert_eq!(view["left"], json!([member.id]));
+    assert_eq!((&view["left"], &view["leaves"]), (&json!([member.id]), &json!([])));
+}
 
-    // The owner cannot keep them in the list; dropping them works.
+#[tokio::test]
+async fn a_device_that_deletes_itself_leaves_its_signed_word_behind() {
+    let server = Server::new().await;
+    let (owner, member) = (server.phone().await, server.phone().await);
+    let channel = server.channel_with(&owner, 3600, &[(&member, "Member")]).await;
+    let elsewhere = server.channel(&owner, 3600).await;
+
+    let leaves = json!({ "leaves": [
+        member.device.seal(&leave_of(&member, &channel)),
+        // Not kept: a channel it is not in, and one signed by somebody else.
+        member.device.seal(&leave_of(&member, &elsewhere)),
+        owner.device.seal(&leave_of(&member, &channel)),
+    ] });
+    assert_eq!(server.as_phone(&member, DELETE, "/v1/devices/me", Some(leaves)).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("leaves").await, 1);
+
+    // The device is gone, keys and all, but its word that it left is there to check.
+    let (_, view) = server.as_phone(&owner, GET, &format!("/v1/channels/{channel}/members"), None).await;
+    assert_eq!(view["keys"].as_array().unwrap().len(), 1);
+    let key = unb64(view["leaves"][0]["signing_key"].as_str().unwrap()).unwrap();
+    let signed: Signed = serde_json::from_value(view["leaves"][0]["leave"].clone()).unwrap();
+    let listed = RosterMember { device: member.id.clone(), name: "Member".into(), since: 2 };
+    assert!(open_leave(&channel, &listed, &key, &signed).is_ok());
+
+    // The owner's list may go on naming it until the owner signs one without it.
     let both = roster(&channel, 3, &[(&owner, "Owner"), (&member, "Member")]);
-    assert_eq!(server.put_roster(&owner, &channel, &both).await.0, StatusCode::CONFLICT);
-    let alone = roster(&channel, 3, &[(&owner, "Owner")]);
+    assert_eq!(server.put_roster(&owner, &channel, &both).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("leaves").await, 1);
+    let alone = roster(&channel, 4, &[(&owner, "Owner")]);
     assert_eq!(server.put_roster(&owner, &channel, &alone).await.0, StatusCode::NO_CONTENT);
-    assert_eq!(server.rows("members").await, 1);
+    assert_eq!(server.rows("leaves").await, 0);
 }
 
 #[tokio::test]

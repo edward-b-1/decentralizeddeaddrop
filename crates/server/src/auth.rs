@@ -2,6 +2,7 @@
 //! afterwards (challenge, signature, session token).
 
 use axum::Json;
+use axum::body::Bytes;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
 
@@ -11,6 +12,7 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
 use deaddrop_core::encoding::{b64, random_bytes, random_token, unb64};
 use deaddrop_core::keys;
+use deaddrop_core::records::{Leave, Signed};
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -283,17 +285,50 @@ pub async fn me(auth: Auth) -> Json<Value> {
     Json(json!({ "device_id": auth.device, "operator": auth.operator }))
 }
 
+#[derive(Deserialize, Default)]
+pub struct Deleting {
+    /// A signed `records::Leave` for each channel the device is in and does not own.
+    #[serde(default)]
+    leaves: Vec<Signed>,
+}
+
 /// `DELETE /v1/devices/me`: delete this device and everything tied to it. Channels it
 /// owns go with it, since nobody else could ever sign for them.
-pub async fn delete_me(State(state): State<AppState>, auth: Auth) -> ApiResult<StatusCode> {
-    let affected = state.store.run(move |db| delete_device(db, &auth.device)).await?;
+///
+/// The body, if there is one, is `{"leaves": [...]}`: the device's signed word that it
+/// is leaving each channel it is in. Those are kept for the channels' owners, whose
+/// phones would otherwise have only this server's word that the device is gone.
+pub async fn delete_me(State(state): State<AppState>, auth: Auth, body: Bytes) -> ApiResult<StatusCode> {
+    let deleting: Deleting = if body.is_empty() {
+        Deleting::default()
+    } else {
+        serde_json::from_slice(&body).map_err(|_| ApiError::bad("leaves are not valid"))?
+    };
+    let affected = state.store.run(move |db| delete_device(db, &auth.device, &deleting.leaves)).await?;
     state.wake_all(&affected, Wake::Changed);
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Removes a device; returns the devices that shared a channel with it.
-pub fn delete_device(db: &mut rusqlite::Connection, device: &str) -> ApiResult<Vec<String>> {
+/// Removes a device; returns the devices that shared a channel with it. `leaves` is what
+/// the device signed on its way out, if it is the one asking: each that checks out, for
+/// a channel it is in, is kept.
+pub fn delete_device(db: &mut rusqlite::Connection, device: &str, leaves: &[Signed]) -> ApiResult<Vec<String>> {
     let tx = db.transaction()?;
+    if let Some(key) = store::signing_key(&tx, device)? {
+        for signed in leaves {
+            // Which channel it is for is read from the record; the signature is checked
+            // before anything is kept.
+            let Ok(claimed) = serde_json::from_str::<Leave>(&signed.record) else { continue };
+            let member: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM members WHERE channel = ?1 AND device = ?2)",
+                [claimed.channel.as_str(), device],
+                |row| row.get(0),
+            )?;
+            if member {
+                store::keep_leave(&tx, &claimed.channel, device, &key, signed)?;
+            }
+        }
+    }
     let affected = {
         let mut query = tx.prepare(
             "SELECT DISTINCT other.device FROM members mine

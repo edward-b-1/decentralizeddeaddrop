@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use deaddrop_core::encoding::random_token;
+use deaddrop_core::records::{Leave, Signed};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -83,6 +84,19 @@ CREATE TABLE IF NOT EXISTS members (
     PRIMARY KEY (channel, device)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS members_by_device ON members(device);
+
+-- A member's signed word that they have left a channel (records::Leave), for the owner's
+-- phone to check. Kept until the owner's roster drops the member. It holds the signing
+-- key and has no link to the devices table because the device itself may be deleted by
+-- then: taking a server off a phone leaves these behind for the channels it was in.
+CREATE TABLE IF NOT EXISTS leaves (
+    channel     TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    device      TEXT NOT NULL,
+    signing_key BLOB NOT NULL,
+    record      TEXT NOT NULL,
+    signature   TEXT NOT NULL,
+    PRIMARY KEY (channel, device)
+) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS join_requests (
     channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
@@ -229,6 +243,28 @@ pub fn consume_token(db: &Connection, scope: &str, token: &str, now: i64) -> rus
 
 pub fn signing_key(db: &Connection, device: &str) -> rusqlite::Result<Option<Vec<u8>>> {
     db.query_row("SELECT signing_key FROM devices WHERE id = ?1", [device], |row| row.get(0)).optional()
+}
+
+/// Checks a leave that `device` has signed for `channel` and keeps it for the owner's
+/// phone. False, and nothing kept, if it is not that device's signed word about that
+/// channel.
+pub fn keep_leave(
+    db: &Connection,
+    channel: &str,
+    device: &str,
+    signing_key: &[u8],
+    signed: &Signed,
+) -> rusqlite::Result<bool> {
+    let Ok(leave) = signed.open::<Leave>(signing_key) else { return Ok(false) };
+    if leave.channel != channel || leave.device != device {
+        return Ok(false);
+    }
+    db.execute(
+        "INSERT INTO leaves (channel, device, signing_key, record, signature) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (channel, device) DO UPDATE SET signing_key = ?3, record = ?4, signature = ?5",
+        params![channel, device, signing_key, signed.record, signed.signature],
+    )?;
+    Ok(true)
 }
 
 /// Whether `device` currently receives `channel`'s messages.

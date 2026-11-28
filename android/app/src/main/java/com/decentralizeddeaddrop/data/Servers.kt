@@ -24,7 +24,12 @@ import kotlin.concurrent.thread
 data class MemberUi(
     val device: String,
     val name: String,
+    /** No longer taking part, though the owner's member list still has them. Only the server's word, unless [leftConfirmed]. */
     val hasLeft: Boolean,
+    /** Has left by their own signed word, which this phone has checked. The owner's phone takes them off the list by itself. */
+    val leftConfirmed: Boolean,
+    /** The server no longer has their device. */
+    val missing: Boolean,
     /** This phone's own entry. */
     val isMe: Boolean,
     /** The person holding this phone has compared safety numbers with this member. */
@@ -198,7 +203,7 @@ object Servers {
                         ownedByMe = channel.ownedByMe,
                         maxAge = channel.maxAge.toLong(),
                         members = channel.members.map {
-                            MemberUi(it.device, it.name, it.hasLeft, isMe = it.device == me, verified = it.device in entry.verified)
+                            MemberUi(it.device, it.name, it.hasLeft, it.leftConfirmed, it.missing, isMe = it.device == me, verified = it.device in entry.verified)
                         },
                         myName = channel.members.firstOrNull { it.device == me }?.name.orEmpty(),
                         lastLine = when {

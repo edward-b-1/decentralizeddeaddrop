@@ -105,7 +105,7 @@ covers `<context>\n<record>` where the context is `deaddrop/channel/v1` or
 | POST | `/v1/sessions/challenge` | anyone | `device_id` → `challenge` |
 | POST | `/v1/sessions` | anyone | `device_id`, `challenge`, `signature` over `deaddrop/session/v1\n<server_id>\n<challenge>` → session `token` (one hour) |
 | GET | `/v1/devices/me` | device | Who am I |
-| DELETE | `/v1/devices/me` | device | Delete this device, its memberships and the channels it owns |
+| DELETE | `/v1/devices/me` | device | Delete this device, its memberships and the channels it owns. Optional `leaves`: a signed leave for each channel it is in, kept for those channels' owners |
 
 A device ID is base32 of the first ten bytes of SHA-256 of the signing key. `agreement_sig`
 is the signing key's signature over `deaddrop/agreement-key/v1\n<base64 agreement key>`.
@@ -144,8 +144,19 @@ caller appears to come from the proxy, and the limit becomes one shared limit.
 | GET | `/v1/channels/{channel}/join-requests` | owner | Who is asking, with their keys |
 | DELETE | `/v1/channels/{channel}/join-requests/{device}` | owner | Decline |
 | PUT | `/v1/channels/{channel}/roster` | owner | New signed roster (higher version): the only way to add or remove members |
-| GET | `/v1/channels/{channel}/members` | member | Signed roster, who has left since, every member's keys |
-| DELETE | `/v1/channels/{channel}/members/me` | member | Leave |
+| GET | `/v1/channels/{channel}/members` | member | Signed roster, who has left since (`left`), what the leavers signed (`leaves`), every member's keys |
+| DELETE | `/v1/channels/{channel}/members/me` | member | Leave. `leave`: the member's signed leave (optional, for versions up to 0.1.1) |
+
+A new roster may list anyone in the roster it replaces and anyone who has asked to join,
+and nobody else. Delivery starts only for those who asked: a member who has left stays
+left for as long as the owner goes on listing them.
+
+`left` is the server's own word and nothing more. A **leave** is a record the leaving
+device signs (`deaddrop/leave/v1`: channel, device ID, the roster version it held), and
+is what a channel owner's phone checks before it signs a roster without that member. The
+server checks a leave before keeping it, keeps it with the signing key (the device may
+be deleted by the time anyone reads it), and deletes it when the owner's roster no
+longer lists the member or lets them back in.
 
 ### Messaging keys and prekeys
 

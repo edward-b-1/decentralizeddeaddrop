@@ -142,7 +142,7 @@ mod tests {
             v: 1,
             channel: crate::encoding::random_id(),
             version: 1,
-            members: vec![RosterMember { device: owner.device_id(), name: "Owner".into() }],
+            members: vec![RosterMember { device: owner.device_id(), name: "Owner".into(), since: 1 }],
             issued: 1_800_000_000,
         };
         let signed = owner.seal(&roster);

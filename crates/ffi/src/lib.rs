@@ -151,8 +151,14 @@ pub struct DeviceInfo {
 pub struct Member {
     pub device: String,
     pub name: String,
-    /// Has left since the owner last signed the member list.
+    /// No longer taking part, though the owner's signed member list still has them.
+    /// Unless `left_confirmed`, this is only the server's word.
     pub has_left: bool,
+    /// Has left by their own signed word, which this device has checked. The owner's
+    /// phone takes them off the list by itself.
+    pub left_confirmed: bool,
+    /// The server no longer has their device. For the owner to remove, or not.
+    pub missing: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -305,6 +311,8 @@ impl Session {
                         device: member.device.clone(),
                         name: member.name.clone(),
                         has_left: channel.left.contains(&member.device),
+                        left_confirmed: channel.confirmed.contains(&member.device),
+                        missing: channel.missing.contains(&member.device),
                     })
                     .collect(),
             })

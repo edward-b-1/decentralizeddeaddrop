@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use deaddrop_client::{Account, ClientError, Event, Link, ServerAddress, Wake, WayIn, WaysIn};
 use deaddrop_core::encoding::random_id;
+use deaddrop_core::records::Leave;
 use deaddrop_core::soft::SoftDevice;
 use deaddropd::{AppState, Store, tls};
 
@@ -40,6 +41,13 @@ impl TestServer {
             runtime,
             files,
         }
+    }
+
+    /// Changes the server's database behind its back: what a server that lies, or one
+    /// that has been broken into, could do.
+    fn tamper(&self, sql: String) {
+        let work = self.state.store.run(move |db| Ok(db.execute_batch(&sql)?));
+        self.runtime.block_on(work).unwrap();
     }
 
     /// How many rows a table on the server holds.
@@ -468,10 +476,12 @@ fn taking_a_server_off_a_phone_leaves_nothing_waiting_for_it() {
     assert_eq!(server.rows("messages"), 0, "nothing waits for a phone that will never collect it");
     assert!(ben.try_sync().is_err());
 
-    // The others carry on: Ben counts as having left, and the channel he owned is gone.
+    // The others carry on. Ben left his signed word behind for the channel he was in,
+    // so Anna's phone takes him off its list unasked; the channel he owned is gone.
+    assert_eq!(server.rows("leaves"), 1);
     cara.sync();
     assert!(cara.account.channel(&bens).is_none());
-    assert_eq!(cara.account.channel(&id).unwrap().left, [ben.account.device()]);
+    assert_eq!(cara.account.channel(&id).unwrap().confirmed, [ben.account.device()]);
     anna.sync();
     assert_eq!(anna.account.channel(&id).unwrap().members.len(), 2);
     assert_eq!(anna.send(&id, "just us now"), Ok(true));
@@ -586,18 +596,115 @@ fn the_operator_sees_devices_by_id_and_can_remove_one() {
 }
 
 #[test]
-fn a_device_the_operator_removes_counts_as_having_left() {
+fn someone_whose_device_is_gone_stays_listed_until_the_owner_removes_them() {
     let server = TestServer::start();
     let mut anna = Person::operator(&server);
     let mut ben = Person::invited_by(&mut anna);
     let mut cara = Person::invited_by(&mut anna);
+    let mut dan = Person::invited_by(&mut anna);
     let id = channel(&mut ben, "Ben", &mut [(&mut anna, "Anna"), (&mut cara, "Cara")]);
+    let gone = vec![cara.account.device().to_owned()];
 
+    // The operator removes Cara's device. She signed nothing; the others have only the
+    // server's word that her device is no more.
     anna.account.remove_device(&anna.keys, cara.account.device()).unwrap();
     anna.sync();
-    assert_eq!(anna.account.channel(&id).unwrap().left, [cara.account.device()]);
+    assert_eq!(anna.account.channel(&id).unwrap().left, gone);
     ben.sync();
-    assert_eq!(ben.account.channel(&id).unwrap().members.len(), 2);
+    let held = ben.account.channel(&id).unwrap();
+    assert_eq!((&held.left, &held.missing), (&gone, &gone));
+    assert!(held.confirmed.is_empty());
+    assert_eq!(held.members.len(), 3, "Ben's phone, the owner's, signed nobody out");
+
+    // The channel works meanwhile, and Ben can let someone else in.
     assert_eq!(ben.send(&id, "two of us"), Ok(true));
     assert_eq!(Person::texts(&anna.sync()), ["Ben: two of us"]);
+    admit(&mut ben, &id, &mut dan, "Dan");
+    assert_eq!(ben.account.channel(&id).unwrap().members.len(), 4);
+
+    // Taking Cara off the list is Ben's decision, and he takes it.
+    ben.account.remove(&ben.keys, &id, &gone[0]).unwrap();
+    let held = ben.account.channel(&id).unwrap();
+    assert_eq!(held.members.len(), 3);
+    assert!(held.left.is_empty() && held.missing.is_empty());
+}
+
+#[test]
+fn a_server_that_only_says_someone_has_left_gets_nobody_signed_out() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let mut dan = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben"), (&mut cara, "Cara")]);
+    let version = anna.account.channel(&id).unwrap().roster_version;
+    let cara_id = cara.account.device().to_owned();
+
+    // The server lies: Cara has left, it says, with nothing signed by her to show for it.
+    server.tamper(format!("UPDATE members SET gone = 1 WHERE device = '{cara_id}'"));
+    anna.sync();
+    let held = anna.account.channel(&id).unwrap();
+    assert_eq!(held.left, [cara_id.as_str()]);
+    assert!(held.confirmed.is_empty() && held.missing.is_empty());
+    assert_eq!((held.members.len(), held.roster_version), (3, version), "Anna's phone signed nothing");
+
+    // Signing a list for another reason does not drop her on the quiet either.
+    admit(&mut anna, &id, &mut dan, "Dan");
+    let held = anna.account.channel(&id).unwrap();
+    assert_eq!(held.members.len(), 4);
+    assert_eq!(held.name_of(&cara_id), Some("Cara"));
+
+    // The server stops lying, and she is where she was.
+    server.tamper(format!("UPDATE members SET gone = 0 WHERE device = '{cara_id}'"));
+    anna.sync();
+    assert!(anna.account.channel(&id).unwrap().left.is_empty());
+    cara.sync();
+    assert_eq!(anna.send(&id, "still with us"), Ok(true));
+    assert_eq!(Person::texts(&cara.sync()), ["Anna: still with us"]);
+}
+
+#[test]
+fn a_leave_is_believed_only_from_the_member_themselves_and_only_once() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben"), (&mut cara, "Cara")]);
+    let cara_id = cara.account.device().to_owned();
+    let still_in = |person: &Person| {
+        let held = person.account.channel(&id).unwrap();
+        held.members.len() == 3 && held.confirmed.is_empty() && held.left.is_empty()
+    };
+
+    // Ben signs a leave in Cara's name, and the server passes it off as hers.
+    let forged = ben.keys.seal(&Leave { v: 1, channel: id.clone(), device: cara_id.clone(), roster: 3, issued: 0 });
+    let key: String = ben.keys.signing_key_der().iter().map(|byte| format!("{byte:02x}")).collect();
+    server.tamper(format!(
+        "INSERT INTO leaves VALUES ('{id}', '{cara_id}', X'{key}', '{}', '{}')",
+        forged.record, forged.signature
+    ));
+    anna.sync();
+    ben.sync();
+    assert!(still_in(&anna) && still_in(&ben), "not her key, so not her word");
+    server.tamper("DELETE FROM leaves".into());
+
+    // Cara really leaves. Ben's phone can tell it is her own word, and Anna's phone, as
+    // the owner's, signs a list without her. The server keeps a copy of what she signed.
+    cara.account.leave(&cara.keys, &id).unwrap();
+    server.tamper("CREATE TABLE kept AS SELECT * FROM leaves".into());
+    ben.sync();
+    assert_eq!(ben.account.channel(&id).unwrap().confirmed, [cara_id.as_str()]);
+    anna.sync();
+    assert_eq!(anna.account.channel(&id).unwrap().members.len(), 2);
+    assert_eq!(server.rows("leaves"), 0, "spent once the owner's list is without her");
+
+    // She comes back, and the server plays her old leave again.
+    admit(&mut anna, &id, &mut cara, "Cara");
+    cara.sync();
+    server.tamper("INSERT INTO leaves SELECT * FROM kept".into());
+    anna.sync();
+    ben.sync();
+    assert!(still_in(&anna) && still_in(&ben), "signed before she was let back in, so it no longer counts");
+    assert_eq!(anna.send(&id, "welcome back"), Ok(true));
+    assert_eq!(Person::texts(&cara.sync()), ["Anna: welcome back"]);
 }

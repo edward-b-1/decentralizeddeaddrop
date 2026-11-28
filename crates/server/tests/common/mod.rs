@@ -261,7 +261,7 @@ pub fn roster(channel: &str, version: u64, members: &[(&Phone, &str)]) -> Roster
         version,
         members: members
             .iter()
-            .map(|(phone, name)| RosterMember { device: phone.id.clone(), name: (*name).to_owned() })
+            .map(|(phone, name)| RosterMember { device: phone.id.clone(), name: (*name).to_owned(), since: 0 })
             .collect(),
         issued: 1_800_000_000,
     }

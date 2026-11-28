@@ -1,4 +1,5 @@
-//! Records signed by a channel's owner.
+//! Signed records: a channel's settings and member list, signed by its owner, and what
+//! a device signs for itself (its messaging keys, and its word that it is leaving).
 //!
 //! A record travels as the exact JSON text that was signed, plus the signature
 //! ([`Signed`]). Readers verify the signature over that text and only then parse it, so
@@ -89,6 +90,11 @@ pub struct RosterMember {
     pub device: String,
     /// The name this member goes by in this channel.
     pub name: String,
+    /// The version of the roster that let this member in. A [`Leave`] they signed
+    /// before that belongs to an earlier time in the channel and no longer counts.
+    /// Absent (0) in rosters signed by versions up to 0.1.1.
+    #[serde(default)]
+    pub since: u64,
 }
 
 /// The complete member list of a channel, signed by its owner. Every membership change
@@ -108,6 +114,50 @@ impl Record for Roster {
     fn format_version(&self) -> u32 {
         self.v
     }
+}
+
+/// A member's own word that they are leaving a channel, signed with their device's
+/// signing key (the one its device ID is the hash of).
+///
+/// Only the owner signs the member list, and the owner's phone drops a member from it
+/// without being asked only on the strength of one of these. A server that merely says
+/// someone has left gets nothing signed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Leave {
+    pub v: u32,
+    pub channel: String,
+    /// Device ID of the member leaving.
+    pub device: String,
+    /// The version of the roster the device held when it left.
+    pub roster: u64,
+    pub issued: i64,
+}
+
+impl Record for Leave {
+    const CONTEXT: &'static str = "deaddrop/leave/v1";
+    fn format_version(&self) -> u32 {
+        self.v
+    }
+}
+
+/// Checks a signed [`Leave`] the way a phone must before believing it: the signing key
+/// really is the one the member's device ID is named after, the record is signed by it,
+/// it is about this channel and this member, and it was signed since the member was
+/// last let in (so a leave from an earlier time in the channel cannot be played again).
+pub fn open_leave(
+    channel: &str,
+    member: &RosterMember,
+    signing_key_der: &[u8],
+    signed: &Signed,
+) -> Result<Leave, RecordError> {
+    if keys::device_id(signing_key_der) != member.device {
+        return Err(RecordError::BadSignature);
+    }
+    let leave: Leave = signed.open(signing_key_der)?;
+    if leave.channel != channel || leave.device != member.device || leave.roster < member.since {
+        return Err(RecordError::BadSignature);
+    }
+    Ok(leave)
 }
 
 /// A device's messaging keys, signed by its signing key (the one its device ID is the
