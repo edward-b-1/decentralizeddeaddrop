@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use deaddrop_client::{Account, ClientError, Event, Link, ServerAddress, Wake, WayIn, WaysIn};
+use deaddrop_client::{Account, ClientError, Event, Link, ServerAddress, Wake, WayIn, WaysIn, Why};
 use deaddrop_core::encoding::random_id;
 use deaddrop_core::records::{Closed, Leave};
 use deaddrop_core::soft::SoftDevice;
@@ -111,9 +111,24 @@ impl Person {
         self.account.sync(&self.keys, &mut |bytes| *stored = bytes.to_vec())
     }
 
+    /// Hands the engine a message and has it try the server at once, as an app does.
+    /// True if nothing is left waiting to go.
     fn send(&mut self, channel: &str, text: &str) -> Result<bool, ClientError> {
         let stored = &mut self.stored;
-        self.account.send(&self.keys, channel, text, &mut |bytes| *stored = bytes.to_vec())
+        let mut save = |bytes: &[u8]| *stored = bytes.to_vec();
+        self.account.send(channel, text, &mut save)?;
+        self.account.flush(&self.keys, &mut save)
+    }
+
+    /// Takes the signal away, or brings it back: the app as it was last stored, pointed
+    /// at a dead port or at the server again.
+    fn signal(&mut self, server: &TestServer, on: bool) {
+        let (real, dead) = (format!("\"port\":{}", server.address.port), "\"port\":9".to_owned());
+        let (from, to) = if on { (dead, real) } else { (real, dead) };
+        let stored = String::from_utf8(self.stored.clone()).unwrap();
+        assert!(stored.contains(&from));
+        self.stored = stored.replace(&from, &to).into_bytes();
+        self.restart();
     }
 
     /// The IDs of the messages among some events.
@@ -890,4 +905,152 @@ fn an_invite_made_for_two_lets_two_in_and_no_more() {
     dan.account.ask_to_join(&dan.keys, &link, "Dan").unwrap();
     assert!(anna.account.join_requests(&anna.keys, &id).unwrap().is_empty());
     assert_eq!(server.rows("join_requests"), 0);
+}
+
+#[test]
+fn a_message_the_server_cannot_take_just_now_waits_and_goes_later() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+
+    // The server is in trouble: it answers, but with a fault of its own.
+    server.tamper("ALTER TABLE messages RENAME TO mislaid".into());
+    assert_eq!(anna.send(&id, "one"), Ok(false));
+    assert_eq!(anna.send(&id, "two"), Ok(false));
+    // Waiting, in order: Ben's keys for these messages, the first message, the second.
+    assert_eq!((anna.account.unsent(), anna.account.waiting().len()), (3, 2));
+    assert!(anna.account.not_sent().is_empty(), "a fault is not a refusal");
+
+    // It is put right, and Anna's app has been closed and opened in between. The keys
+    // went first, so Ben can read what follows them.
+    server.tamper("ALTER TABLE mislaid RENAME TO messages".into());
+    anna.restart();
+    assert_eq!(anna.account.waiting().len(), 2);
+    anna.sync();
+    assert_eq!((anna.account.unsent(), anna.account.waiting().len()), (0, 0));
+    assert!(anna.account.not_sent().is_empty());
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: one", "Anna: two"]);
+}
+
+#[test]
+fn a_message_the_server_will_never_take_is_said_not_to_have_been_sent() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+
+    // One the server has taken leaves nothing behind in the engine.
+    assert_eq!(ben.send(&id, "hello"), Ok(true));
+    assert!(ben.account.waiting().is_empty() && ben.account.not_sent().is_empty());
+
+    // One that is too large to send never reaches the server. What follows it does.
+    assert_eq!(anna.send(&id, &"x".repeat(40_000)), Ok(true), "nothing is left waiting");
+    assert_eq!(anna.send(&id, "short"), Ok(true));
+    let refused = anna.account.not_sent().to_vec();
+    assert_eq!(refused.len(), 1);
+    assert_eq!((refused[0].channel.as_str(), &refused[0].why), (id.as_str(), &Why::TooLarge));
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: short"]);
+    assert_eq!(Person::texts(&anna.sync()), ["Ben: hello"]);
+
+    // Anna takes Ben out. His phone has not heard when he writes again.
+    anna.account.remove(&anna.keys, &id, ben.account.device()).unwrap();
+    assert_eq!(ben.send(&id, "anyone there?"), Ok(true), "nothing is left waiting");
+    let refused = ben.account.not_sent().to_vec();
+    assert_eq!(refused.len(), 1);
+    assert_eq!((refused[0].channel.as_str(), &refused[0].why), (id.as_str(), &Why::NotInChannel));
+    assert_eq!(server.rows("messages"), 0);
+
+    // It stays listed, through the app closing, until the app says it has noted it.
+    ben.restart();
+    assert_eq!(ben.account.not_sent(), refused);
+    ben.account.stored(&[refused[0].id.clone()]);
+    assert!(ben.account.not_sent().is_empty());
+}
+
+#[test]
+fn what_was_waiting_for_a_channel_this_phone_is_taken_out_of_is_not_sent() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+
+    // Ben writes with no signal, and Anna takes him out before it returns.
+    ben.signal(&server, false);
+    assert_eq!(ben.send(&id, "running late"), Ok(false));
+    let waiting = ben.account.waiting();
+    assert_eq!(waiting.len(), 1);
+    anna.account.remove(&anna.keys, &id, ben.account.device()).unwrap();
+
+    // The signal returns to a server that will not store anything just now, so the
+    // message is still waiting when Ben's phone learns, from Anna's signature, that it
+    // is out of the channel and gives the channel up.
+    server.tamper("ALTER TABLE messages RENAME TO mislaid".into());
+    ben.signal(&server, true);
+    assert!(ben.try_sync().is_err(), "the server cannot hand over its queue either");
+    assert!(ben.account.channel(&id).is_none());
+    assert!(ben.account.waiting().is_empty());
+    let refused = ben.account.not_sent();
+    assert_eq!(refused.len(), 1);
+    assert_eq!((&refused[0].id, &refused[0].why), (&waiting[0], &Why::NotInChannel));
+}
+
+#[test]
+fn a_message_written_with_no_signal_to_someone_new_waits_for_their_keys() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+    admit(&mut anna, &id, &mut cara, "Cara");
+    ben.sync();
+    cara.sync();
+
+    // Ben has never written to Cara, so sealing anything for her takes a key of hers
+    // from the server. With no signal the message is taken all the same, and kept.
+    ben.signal(&server, false);
+    assert_eq!(ben.send(&id, "welcome Cara"), Ok(false));
+    assert_eq!((ben.account.waiting().len(), server.rows("messages")), (1, 0));
+
+    ben.signal(&server, true);
+    assert_eq!(ben.account.waiting().len(), 1, "kept through the app closing");
+    ben.sync();
+    assert!(ben.account.waiting().is_empty() && ben.account.not_sent().is_empty());
+    assert_eq!(Person::texts(&cara.sync()), ["Ben: welcome Cara"]);
+    assert_eq!(Person::texts(&anna.sync()), ["Ben: welcome Cara"]);
+}
+
+#[test]
+fn a_waiting_message_can_be_taken_back_and_what_follows_it_still_goes() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben")]);
+
+    // Ben has written, so Anna's phone can seal for him without the server's help.
+    assert_eq!(ben.send(&id, "hello"), Ok(true));
+    assert_eq!(Person::texts(&anna.sync()), ["Ben: hello"]);
+
+    // No signal. The first message is sealed, with Ben's keys for the channel ahead of
+    // it; the other two are not sealed yet.
+    anna.signal(&server, false);
+    for text in ["not this", "nor this", "this one"] {
+        assert_eq!(anna.send(&id, text), Ok(false));
+    }
+    let waiting = anna.account.waiting();
+    assert_eq!((waiting.len(), anna.account.unsent()), (3, 4));
+
+    // Anna takes two of them back: the sealed one and one that is not.
+    assert!(anna.account.cancel(&waiting[0]) && anna.account.cancel(&waiting[1]));
+    assert!(!anna.account.cancel(&waiting[0]), "it is not there to take back twice");
+    assert_eq!(anna.account.waiting(), [waiting[2].clone()]);
+    assert_eq!(anna.account.unsent(), 2, "Ben's keys still go: the message that is left needs them");
+    anna.stored = anna.account.to_bytes();
+
+    // The signal returns. Only the one she left goes, and Ben can read it.
+    anna.signal(&server, true);
+    anna.sync();
+    assert!(anna.account.waiting().is_empty() && anna.account.not_sent().is_empty());
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: this one"]);
+    assert!(!anna.account.cancel(&waiting[2]), "the server has it: too late to take back");
 }

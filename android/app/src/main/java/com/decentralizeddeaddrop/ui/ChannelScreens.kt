@@ -1,9 +1,16 @@
 package com.decentralizeddeaddrop.ui
 
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +53,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.decentralizeddeaddrop.data.ChannelUi
 import com.decentralizeddeaddrop.data.MessageUi
+import com.decentralizeddeaddrop.data.Sending
 import com.decentralizeddeaddrop.data.ServerUi
 import com.decentralizeddeaddrop.data.Servers
 import com.decentralizeddeaddrop.engine.JoinRequestInfo
@@ -79,7 +93,8 @@ fun ConversationScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, 
         onDispose { Servers.open = null }
     }
     // Follows the newest message. Bringing in earlier ones leaves the view where it was.
-    LaunchedEffect(messages.lastOrNull()?.id) {
+    // Also when the foot of the screen changes height, which would otherwise cover it.
+    LaunchedEffect(messages.lastOrNull()?.id, channel.unlisted) {
         Servers.markRead(channel.key)
         if (messages.isNotEmpty()) list.animateScrollToItem(messages.lastIndex + if (hasEarlier) 2 else 1)
     }
@@ -149,14 +164,46 @@ fun ConversationScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, 
                     }
                 }
             }
-            items(messages, key = { it.id }) { message -> Bubble(message) }
+            items(messages, key = { it.id }) { message ->
+                // What the person asks to be done with a message of theirs that has not gone.
+                // Not through the runner: it does one thing at a time, and drops the rest.
+                Bubble(message, channel) { work ->
+                    scope.launch {
+                        try {
+                            work()
+                        } catch (failure: Exception) {
+                            runner.problem = explain(failure)
+                        }
+                    }
+                }
+            }
             item { Box(Modifier.size(4.dp)) }
         }
     }
 }
 
+/**
+ * One message. A message of one's own that the server has taken looks as it always has.
+ * One still waiting to be sent, or refused, is paler and says so under it (mockup
+ * send-status-2026-11-28-a): the words carry it, not the colour alone. Pressing one of
+ * those, or holding it, opens what can be done about it ([UnsentDialog]).
+ */
 @Composable
-private fun Bubble(message: MessageUi) {
+private fun Bubble(message: MessageUi, channel: ChannelUi, act: (suspend () -> Unit) -> Unit) {
+    // With a signal a message goes in a moment. It is not called waiting until it has
+    // waited a second, so that the words do not flash under everything that is sent.
+    var waited by remember(message.id) { mutableStateOf(System.currentTimeMillis() / 1000 - message.sent > 2) }
+    if (message.sending == Sending.Waiting && !waited) {
+        LaunchedEffect(message.id) {
+            delay(1000)
+            waited = true
+        }
+    }
+    val waiting = message.sending == Sending.Waiting && waited
+    val failed = message.sending == Sending.NotSent
+    var explaining by remember(message.id) { mutableStateOf(false) }
+    if (explaining && message.sending != Sending.Sent) UnsentDialog(message, channel, close = { explaining = false }, act = act)
+
     if (message.unreadable) {
         Text(
             "A message arrived that this phone could not open.",
@@ -172,15 +219,113 @@ private fun Bubble(message: MessageUi) {
         if (!message.mine) {
             Text(message.name, fontSize = 12.5.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
         }
+        val fill = when {
+            !message.mine -> MaterialTheme.colorScheme.surfaceContainerHigh
+            waiting || failed -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+            else -> MaterialTheme.colorScheme.primaryContainer
+        }
+        val why = if (waiting || failed) {
+            Modifier.combinedClickable(
+                onClickLabel = "See what can be done",
+                onLongClick = { explaining = true },
+                onClick = { explaining = true },
+            )
+        } else {
+            Modifier
+        }
         Text(
             message.text,
-            Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(14.dp))
-                .background(if (message.mine) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(horizontal = 11.dp, vertical = 8.dp),
+            Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(14.dp)).background(fill).then(why).padding(horizontal = 11.dp, vertical = 8.dp),
             fontSize = 15.sp,
         )
-        Text(shortTime(message.sent), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(why, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(shortTime(message.sent), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (waiting || failed) {
+                val colour = if (failed) MaterialTheme.colorScheme.error else LocalSignals.current.waiting
+                Text("·", Modifier.clearAndSetSemantics {}, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SendingMark(clock = waiting, colour)
+                Text(if (failed) "Not sent" else "Waiting to send", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = colour)
+            }
+        }
     }
+}
+
+/** A small clock, for waiting, or a ringed exclamation mark, for not sent. Decoration: the words beside it say the same. */
+@Composable
+private fun SendingMark(clock: Boolean, colour: Color) {
+    Canvas(Modifier.size(12.dp)) {
+        val line = 1.4.dp.toPx()
+        val radius = size.minDimension / 2 - line / 2
+        drawCircle(colour, radius, style = Stroke(line))
+        if (clock) {
+            drawLine(colour, center, Offset(center.x, center.y - radius * 0.6f), line, StrokeCap.Round)
+            drawLine(colour, center, Offset(center.x + radius * 0.45f, center.y + radius * 0.3f), line, StrokeCap.Round)
+        } else {
+            drawLine(colour, Offset(center.x, center.y - radius * 0.5f), Offset(center.x, center.y + radius * 0.05f), line, StrokeCap.Round)
+            drawCircle(colour, line * 0.65f, Offset(center.x, center.y + radius * 0.5f))
+        }
+    }
+}
+
+/**
+ * What can be done with a message of one's own that has not gone: one still waiting to be
+ * sent, or one that was not sent. Says where it stands, and offers to try it, to copy its
+ * text, or to delete it. Deleting one that is waiting takes it back, so that it never goes.
+ */
+@Composable
+private fun UnsentDialog(message: MessageUi, channel: ChannelUi, close: () -> Unit, act: (suspend () -> Unit) -> Unit) {
+    val context = LocalContext.current
+    val waiting = message.sending == Sending.Waiting
+    val state = when {
+        waiting -> "The server has not taken it yet. It is tried again by itself until it goes."
+        message.problem == MessageUi.NOT_IN_CHANNEL -> "The server would not take it, because this phone is no longer in ${channel.name}."
+        message.problem == MessageUi.TOO_LARGE -> "It is too large to send. It can be sent as several shorter messages."
+        else -> "It could not be sent: ${message.problem.orEmpty().trimEnd('.')}."
+    }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text(if (waiting) "This message is waiting to be sent" else "This message was not sent") },
+        text = {
+            Column {
+                Text("$state Nobody else has it.", Modifier.padding(bottom = 8.dp))
+                if (waiting) {
+                    Choice("Try now") {
+                        close()
+                        act { Servers.sendNow(channel.key, message.id) }
+                    }
+                } else if (message.problem != MessageUi.TOO_LARGE && !channel.unlisted) {
+                    // Sent as a new message. Not offered where it could only be refused
+                    // again: one too large, or a channel this phone cannot send to.
+                    Choice("Try again") {
+                        close()
+                        act { Servers.sendAgain(channel.key, message.id, message.text) }
+                    }
+                }
+                Choice("Copy text") {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Message", message.text))
+                    close()
+                }
+                Choice(if (waiting) "Delete, and do not send" else "Delete", MaterialTheme.colorScheme.error) {
+                    close()
+                    act { Servers.deleteMessage(channel.key, message.id) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = close) { Text("Close") } },
+    )
+}
+
+/** One of the things a dialog offers to do, on a line of its own. */
+@Composable
+private fun Choice(label: String, colour: Color = MaterialTheme.colorScheme.primary, onClick: () -> Unit) {
+    Text(
+        label,
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(role = Role.Button, onClick = onClick).padding(vertical = 12.dp, horizontal = 4.dp),
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Medium,
+        color = colour,
+    )
 }
 
 // ---------------------------------------------------------------- channel details (mockup screen 3)

@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use deaddrop_client::{Account, ClientError, DeviceKeys, Event, Link, Live, Wake, WayIn, WaysIn};
+use deaddrop_client::{Account, ClientError, DeviceKeys, Event, Link, Live, Wake, WayIn, WaysIn, Why};
 
 uniffi::setup_scaffolding!();
 
@@ -190,6 +190,41 @@ pub struct WaysInInfo {
     pub password_set: bool,
 }
 
+/// Why a message did not go, and never will.
+#[derive(uniffi::Enum)]
+pub enum WhyNotSent {
+    /// This device is no longer in the channel, or the channel is gone.
+    NotInChannel,
+    /// The message is too large to send.
+    TooLarge,
+    /// Anything else, in the engine's own words or the server's.
+    Other { message: String },
+}
+
+/// A message [`Session::send`] took that the server will never take.
+#[derive(uniffi::Record)]
+pub struct NotSentInfo {
+    /// The ID [`Session::send`] gave the message.
+    pub id: String,
+    pub channel: String,
+    pub why: WhyNotSent,
+}
+
+/// What has become of the messages [`Session::send`] took, as of one moment. A message
+/// in neither list is with the server.
+#[derive(uniffi::Record)]
+pub struct Unsent {
+    /// IDs of the messages the server has not yet taken. They go by themselves.
+    pub waiting: Vec<String>,
+    /// The messages the server will never take. Each stays listed until
+    /// [`Session::stored`] is given its ID.
+    pub not_sent: Vec<NotSentInfo>,
+    /// How many things in all are waiting for the server to take them: the messages in
+    /// `waiting`, the key hand-overs that go with them, and the engine's own messages.
+    /// While it is not zero, [`Session::flush`] or [`Session::sync`] has work to do.
+    pub queued: u32,
+}
+
 /// A message carries `id`, a random identifier the engine gives it. The engine hands a
 /// message over, under the same ID, until [`Session::stored`] says the app has it.
 #[derive(uniffi::Enum)]
@@ -341,9 +376,22 @@ impl Session {
         self.account().asked().map(str::to_owned).collect()
     }
 
-    /// Sealed messages waiting for the server to be reachable.
-    pub fn unsent(&self) -> u32 {
-        self.account().unsent() as u32
+    /// Which of the messages [`Session::send`] took are still waiting for the server
+    /// to take them, and which it has refused for good. Both lists are read at one
+    /// moment, so a message is never missing from both while it is on its way from
+    /// the first to the second.
+    pub fn unsent(&self) -> Unsent {
+        let account = self.account();
+        let not_sent = account.not_sent().iter().map(|message| NotSentInfo {
+            id: message.id.clone(),
+            channel: message.channel.clone(),
+            why: match &message.why {
+                Why::NotInChannel => WhyNotSent::NotInChannel,
+                Why::TooLarge => WhyNotSent::TooLarge,
+                Why::Other(message) => WhyNotSent::Other { message: message.clone() },
+            },
+        });
+        Unsent { not_sent: not_sent.collect(), waiting: account.waiting(), queued: account.unsent() as u32 }
     }
 
     pub fn create_channel(&self, name: String, my_name: String, max_age: u64) -> Outcome<String> {
@@ -412,14 +460,35 @@ impl Session {
         self.change(|account, keys| account.leave_server(keys))
     }
 
-    /// Sends a text message. False means it is sealed and stored but the server could
-    /// not be reached; it goes with the next [`Session::sync`].
-    pub fn send(&self, channel: String, text: String) -> Outcome<bool> {
+    /// Takes a text message for a channel and returns the ID it is known by from here
+    /// on. It does not talk to the server: the message is stored, and goes with the
+    /// next [`Session::flush`] or [`Session::sync`]. [`Session::unsent`] says, by this
+    /// ID, whether the server has taken it yet or never will.
+    pub fn send(&self, channel: String, text: String) -> Outcome<String> {
         let mut account = self.account();
         let store = &self.store;
-        let sent = account.send(&self.keys, &channel, &text, &mut |bytes| store.save(bytes.to_vec()));
+        Ok(account.send(&channel, &text, &mut |bytes| store.save(bytes.to_vec()))?)
+    }
+
+    /// Takes back a message that is still waiting to go, so that it is never sent.
+    /// False means it was no longer waiting: the server has it, or it is listed as not
+    /// sent ([`Session::unsent`]). This waits for any sending already under way.
+    pub fn cancel(&self, id: String) -> bool {
+        let mut account = self.account();
+        let taken_back = account.cancel(&id);
+        self.store.save(account.to_bytes());
+        taken_back
+    }
+
+    /// Sends whatever is waiting to go. True if nothing is left waiting; false if the
+    /// server could not be reached or would not take something just now, in which case
+    /// it all goes with a later call or the next [`Session::sync`].
+    pub fn flush(&self) -> Outcome<bool> {
+        let mut account = self.account();
+        let store = &self.store;
+        let gone = account.flush(&self.keys, &mut |bytes| store.save(bytes.to_vec()));
         store.save(account.to_bytes());
-        Ok(sent?)
+        Ok(gone?)
     }
 
     /// Does everything due and returns what is new, with every message not yet
@@ -441,7 +510,8 @@ impl Session {
     }
 
     /// The app has stored the messages with these IDs, somewhere that survives a
-    /// crash, so the engine may forget them.
+    /// crash, so the engine may forget them: messages that arrived, and its note that
+    /// one of its own was not sent ([`Session::unsent`]).
     pub fn stored(&self, ids: Vec<String>) {
         let mut account = self.account();
         account.stored(&ids);

@@ -161,6 +161,37 @@ struct Asked {
     owner: String,
 }
 
+/// Why a message did not go, and never will.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Why {
+    /// This device is no longer in the channel, or the channel is gone.
+    NotInChannel,
+    /// The message is too large to send.
+    TooLarge,
+    /// Anything else, in the engine's own words or the server's.
+    Other(String),
+}
+
+/// A message [`Account::send`] took that the server will never take. Kept, and listed by
+/// [`Account::not_sent`], until [`Account::stored`] says the app has made a note of it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotSent {
+    /// The ID [`Account::send`] gave the message.
+    pub id: String,
+    pub channel: String,
+    pub why: Why,
+}
+
+/// A message taken from the app and not yet sealed. It is sealed when its turn comes to
+/// go, which may need the server (for the keys of a member not yet written to).
+#[derive(Clone, Serialize, Deserialize)]
+struct Draft {
+    id: String,
+    channel: String,
+    /// What is to be sealed.
+    payload: String,
+}
+
 /// Something sealed and waiting to be posted. Kept in the saved state so that nothing
 /// encrypted is ever lost between being made and being sent.
 #[derive(Clone, Serialize, Deserialize)]
@@ -169,6 +200,35 @@ struct Outgoing {
     /// One member (a key hand-over) or everyone (a message).
     to: Option<String>,
     body: String,
+    /// The ID [`Account::send`] gave it, if it is a message the app sent. Absent from
+    /// state saved by versions up to 0.1.1.
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// Whether an attempt to send that failed can never succeed, and if so why. `None`
+/// means it may yet go: the server could not be reached, or is in trouble, or has for
+/// the moment stopped taking this device's requests.
+fn never(error: &ClientError) -> Option<Why> {
+    match error {
+        ClientError::Unreachable | ClientError::AwaitingApproval => None,
+        // A request the server has understood and turned down gets the same answer
+        // however often it is made. Not so one it had no session for (401, 403), one it
+        // gave up waiting for (408), or one too many (429); nor any fault of its own.
+        ClientError::Refused { status, message } => match status {
+            401 | 403 | 408 | 429 => None,
+            404 => Some(Why::NotInChannel),
+            413 => Some(Why::TooLarge),
+            400..=499 => Some(Why::Other(format!("the server refused it: {message}"))),
+            _ => None,
+        },
+        ClientError::UnknownChannel
+        | ClientError::Crypto(deaddrop_crypto::Error::NotAMember | deaddrop_crypto::Error::UnknownChannel) => {
+            Some(Why::NotInChannel)
+        }
+        ClientError::Crypto(deaddrop_crypto::Error::TooLarge) => Some(Why::TooLarge),
+        other => Some(Why::Other(other.to_string())),
+    }
 }
 
 /// A message this device has opened and the app has not yet said it has stored. Kept
@@ -199,7 +259,13 @@ pub struct Account {
     asked: Vec<Asked>,
     /// Invites made to channels this device owns, and not yet used up.
     invites: Vec<Invite>,
+    /// Messages the app has sent that are not yet sealed, oldest first.
+    drafts: VecDeque<Draft>,
+    /// What is sealed and not yet taken by the server, oldest first. All of it goes
+    /// before the next draft is sealed.
     outbox: VecDeque<Outgoing>,
+    /// Messages the server will never take, until the app has made a note of each.
+    failed: Vec<NotSent>,
     /// Messages opened and not yet stored by the app, oldest first.
     inbox: VecDeque<Kept>,
     /// When each (channel, member) was last asked to hand their keys over again.
@@ -223,6 +289,10 @@ struct Saved {
     inbox: Vec<Kept>,
     #[serde(default)]
     invites: Vec<Invite>,
+    #[serde(default)]
+    drafts: Vec<Draft>,
+    #[serde(default)]
+    failed: Vec<NotSent>,
 }
 
 /// The server's rule for names: some characters, no spaces at the ends, nothing unprintable.
@@ -288,7 +358,9 @@ impl Account {
             channels: BTreeMap::new(),
             asked: Vec::new(),
             invites: Vec::new(),
+            drafts: VecDeque::new(),
             outbox: VecDeque::new(),
+            failed: Vec::new(),
             inbox: VecDeque::new(),
             asked_keys: HashMap::new(),
         };
@@ -329,9 +401,25 @@ impl Account {
         self.asked.iter().map(|asked| asked.channel.as_str())
     }
 
-    /// Sealed messages made but not yet posted (the server could not be reached).
+    /// How many things are waiting for the server to take them: messages, and the key
+    /// hand-overs that go with them.
     pub fn unsent(&self) -> usize {
-        self.outbox.len()
+        self.drafts.len() + self.outbox.len()
+    }
+
+    /// The IDs of the messages [`Account::send`] took that the server has not yet taken.
+    ///
+    /// A message is in exactly one of three places. It is here; or it is in
+    /// [`Account::not_sent`]; or the server has it, and the engine keeps nothing of it.
+    pub fn waiting(&self) -> Vec<String> {
+        let sealed = self.outbox.iter().filter_map(|queued| queued.id.clone());
+        sealed.chain(self.drafts.iter().map(|draft| draft.id.clone())).collect()
+    }
+
+    /// The messages the server will never take, each until [`Account::stored`] is given
+    /// its ID.
+    pub fn not_sent(&self) -> &[NotSent] {
+        &self.failed
     }
 
     /// Every message opened and not yet [`Account::stored`], oldest first. A sync that
@@ -341,13 +429,15 @@ impl Account {
         self.inbox.iter().map(|kept| kept.event.clone()).collect()
     }
 
-    /// The app has stored the messages with these IDs, somewhere that survives a crash.
+    /// The app has stored the messages with these IDs, somewhere that survives a crash:
+    /// messages that arrived, and its note that one of its own was [`Account::not_sent`].
     /// The engine forgets them. Save the state afterwards.
     pub fn stored(&mut self, ids: &[String]) {
         self.inbox.retain(|kept| match &kept.event {
             Event::Message { id, .. } | Event::Unreadable { id, .. } => !ids.contains(id),
             Event::ChannelsChanged => false,
         });
+        self.failed.retain(|failed| !ids.contains(&failed.id));
     }
 
     // ------------------------------------------------------------------ signing in
@@ -868,6 +958,17 @@ impl Account {
         self.channels.remove(channel);
         self.invites.retain(|invite| invite.channel != channel);
         self.messenger.forget_channel(channel);
+        // What the app sent to this channel and the server has not taken now never goes.
+        let sealed =
+            self.outbox.iter().filter(|queued| queued.channel == channel).filter_map(|queued| queued.id.clone());
+        let unsealed = self.drafts.iter().filter(|draft| draft.channel == channel).map(|draft| draft.id.clone());
+        let lost: Vec<String> = sealed.chain(unsealed).collect();
+        self.failed.extend(lost.into_iter().map(|id| NotSent {
+            id,
+            channel: channel.to_owned(),
+            why: Why::NotInChannel,
+        }));
+        self.drafts.retain(|draft| draft.channel != channel);
         self.outbox.retain(|queued| queued.channel != channel);
         self.inbox.retain(|kept| match &kept.event {
             Event::Message { channel: of, .. } | Event::Unreadable { channel: of, .. } => of != channel,
@@ -1090,59 +1191,141 @@ impl Account {
         Ok(())
     }
 
-    /// Sends a text message to a channel. Returns whether it has reached the server;
-    /// if the server cannot be reached it stays queued and goes with the next sync.
+    /// Takes a text message for a channel and returns the ID it is known by from here
+    /// on. Nothing is sent: [`Account::flush`] does that, and so does every sync.
     ///
-    /// `save` is called once the message is sealed and before anything is posted, so a
-    /// crash at any point neither loses the message nor reuses a key.
-    pub fn send(&mut self, keys: &dyn DeviceKeys, channel: &str, text: &str, save: Save) -> Result<bool, ClientError> {
-        self.post(keys, channel, json!({ "t": "text", "body": text, "at": now() }), save)
+    /// `save` is called with the message in the state, so from the moment this returns
+    /// the message is kept until the server has taken it or has refused it for good.
+    /// [`Account::waiting`] and [`Account::not_sent`] say which, by this ID.
+    pub fn send(&mut self, channel: &str, text: &str, save: Save) -> Result<String, ClientError> {
+        self.sendable(channel)?;
+        let id = random_id();
+        let payload = json!({ "t": "text", "body": text, "at": now() }).to_string();
+        self.drafts.push_back(Draft { id: id.clone(), channel: channel.to_owned(), payload });
+        save(&self.to_bytes());
+        Ok(id)
     }
 
-    /// Seals something for everyone in a channel and posts it.
-    fn post(&mut self, keys: &dyn DeviceKeys, channel: &str, payload: Value, save: Save) -> Result<bool, ClientError> {
+    /// Takes back a message that is still [`Account::waiting`], so that it is never
+    /// sent. Returns whether it was: false means it is no longer waiting, because the
+    /// server has it or because it is listed by [`Account::not_sent`]. Save the state
+    /// afterwards.
+    ///
+    /// Key hand-overs sealed along with it stay in the outbox. They are for every
+    /// message that follows from the same ratchet, not for this one alone.
+    pub fn cancel(&mut self, id: &str) -> bool {
+        let before = self.unsent();
+        self.drafts.retain(|draft| draft.id != id);
+        self.outbox.retain(|queued| queued.id.as_deref() != Some(id));
+        self.unsent() != before
+    }
+
+    /// Whether this device can send to a channel, as far as it knows.
+    fn sendable(&self, channel: &str) -> Result<(), ClientError> {
         let held = self.channels.get(channel).ok_or(ClientError::UnknownChannel)?;
         if held.unlisted {
             return Err(ClientError::Invalid("the server no longer has this device in that channel"));
         }
+        Ok(())
+    }
+
+    /// Seals something for everyone in a channel and puts it, and the key hand-overs
+    /// that must go before it, at the end of the outbox. Save the state before any of
+    /// it is posted: sealing moves keys on.
+    fn seal(
+        &mut self,
+        keys: &dyn DeviceKeys,
+        channel: &str,
+        payload: &str,
+        id: Option<String>,
+    ) -> Result<(), ClientError> {
+        self.sendable(channel)?;
         self.connect_members(keys, channel)?;
-        let sealed = self.messenger.encrypt(channel, payload.to_string().as_bytes(), now())?;
+        let sealed = self.messenger.encrypt(channel, payload.as_bytes(), now())?;
         for (device, body) in sealed.shares {
-            self.outbox.push_back(Outgoing { channel: channel.to_owned(), to: Some(device), body: b64(&body) });
+            self.outbox.push_back(Outgoing {
+                channel: channel.to_owned(),
+                to: Some(device),
+                body: b64(&body),
+                id: None,
+            });
         }
-        self.outbox.push_back(Outgoing { channel: channel.to_owned(), to: None, body: b64(&sealed.message) });
+        self.outbox.push_back(Outgoing { channel: channel.to_owned(), to: None, body: b64(&sealed.message), id });
+        Ok(())
+    }
+
+    /// Seals something of the engine's own for everyone in a channel and posts it.
+    fn post(&mut self, keys: &dyn DeviceKeys, channel: &str, payload: Value, save: Save) -> Result<bool, ClientError> {
+        self.seal(keys, channel, &payload.to_string(), None)?;
         save(&self.to_bytes());
         self.flush(keys, save)
     }
 
-    /// Posts whatever is waiting to go. Returns whether the outbox is now empty.
-    fn flush(&mut self, keys: &dyn DeviceKeys, save: Save) -> Result<bool, ClientError> {
-        let mut posted = false;
-        while let Some(next) = self.outbox.front().cloned() {
+    /// Seals and posts whatever is waiting to go, oldest first. Returns whether nothing
+    /// is left waiting.
+    ///
+    /// Something stops waiting in one of two ways only: the server takes it, or the
+    /// server (or this device, when sealing it) refuses it in a way that cannot change
+    /// ([`never`]). A message the app sent that is refused like that is listed by
+    /// [`Account::not_sent`]. Anything else, a server that cannot be reached or one
+    /// that answers with a fault of its own, leaves it and all that follows it where
+    /// they are, in order, for the next attempt.
+    ///
+    /// `save` is called each time a message is sealed, before it is posted, so a crash
+    /// at any point neither loses the message nor reuses a key.
+    pub fn flush(&mut self, keys: &dyn DeviceKeys, save: Save) -> Result<bool, ClientError> {
+        let mut changed = false;
+        let stopped = loop {
+            let Some(next) = self.outbox.front().cloned() else {
+                // Nothing sealed is waiting, so the next message can be sealed.
+                let Some(draft) = self.drafts.front().cloned() else { break None };
+                // The channel may have gone, or gone out of reach, since the app sent this.
+                let sealed = match self.sendable(&draft.channel) {
+                    Ok(()) => self.seal(keys, &draft.channel, &draft.payload, Some(draft.id.clone())),
+                    Err(_) => Err(ClientError::UnknownChannel),
+                };
+                match sealed {
+                    Ok(()) => {}
+                    Err(error) => match never(&error) {
+                        Some(why) => self.failed.push(NotSent { id: draft.id, channel: draft.channel, why }),
+                        None => break Some(error),
+                    },
+                }
+                self.drafts.pop_front();
+                save(&self.to_bytes());
+                changed = false;
+                continue;
+            };
             let mut body = json!({ "body": next.body });
             if let Some(device) = &next.to {
                 body["to"] = json!([device]);
             }
             match self.request(keys, Method::POST, &format!("/v1/channels/{}/messages", next.channel), Some(body)) {
                 Ok(_) => {}
-                Err(ClientError::Unreachable) => break,
-                Err(ClientError::Refused { .. }) => {
-                    // The server will never take this one (the member has gone, or this
-                    // device has). If it was a key hand-over, start a new ratchet so the
-                    // next message hands keys over afresh.
-                    if next.to.is_some() {
-                        self.messenger.restart_sending(&next.channel);
+                Err(error) => match never(&error) {
+                    // A key hand-over nobody will get (the member has gone, or this
+                    // device has): start a new ratchet, so the next message hands keys
+                    // over afresh.
+                    Some(_) if next.to.is_some() => self.messenger.restart_sending(&next.channel),
+                    Some(why) => {
+                        if let Some(id) = next.id {
+                            self.failed.push(NotSent { id, channel: next.channel, why });
+                        }
                     }
-                }
-                Err(other) => return Err(other),
+                    None => break Some(error),
+                },
             }
             self.outbox.pop_front();
-            posted = true;
-        }
-        if posted {
+            changed = true;
+        };
+        if changed {
             save(&self.to_bytes());
         }
-        Ok(self.outbox.is_empty())
+        match stopped {
+            // Nothing more can be done until the operator lets this device in.
+            Some(ClientError::AwaitingApproval) => Err(ClientError::AwaitingApproval),
+            _ => Ok(self.unsent() == 0),
+        }
     }
 
     // ------------------------------------------------------------------ receiving
@@ -1279,7 +1462,7 @@ impl Account {
         for (channel, sender) in lost {
             self.ask_for_keys(keys, &channel, &sender)?;
         }
-        if !self.outbox.is_empty() {
+        if self.unsent() > 0 {
             save(&self.to_bytes());
             self.flush(keys, save)?;
         }
@@ -1313,7 +1496,12 @@ impl Account {
             return Ok(());
         }
         let Ok(body) = self.messenger.ask_again(channel, sender) else { return Ok(()) };
-        self.outbox.push_back(Outgoing { channel: channel.to_owned(), to: Some(sender.to_owned()), body: b64(&body) });
+        self.outbox.push_back(Outgoing {
+            channel: channel.to_owned(),
+            to: Some(sender.to_owned()),
+            body: b64(&body),
+            id: None,
+        });
         self.asked_keys.insert(asked, now);
         Ok(())
     }
@@ -1340,6 +1528,8 @@ impl Account {
             channels: self.channels.values().cloned().collect(),
             asked: self.asked.clone(),
             invites: self.invites.clone(),
+            drafts: self.drafts.iter().cloned().collect(),
+            failed: self.failed.clone(),
             outbox: self.outbox.iter().cloned().collect(),
             inbox: self.inbox.iter().cloned().collect(),
         };
@@ -1365,6 +1555,8 @@ impl Account {
             channels: saved.channels.into_iter().map(|channel| (channel.id.clone(), channel)).collect(),
             asked: saved.asked,
             invites: saved.invites,
+            drafts: saved.drafts.into_iter().collect(),
+            failed: saved.failed,
             outbox: saved.outbox.into_iter().collect(),
             inbox: saved.inbox.into_iter().collect(),
             asked_keys: HashMap::new(),

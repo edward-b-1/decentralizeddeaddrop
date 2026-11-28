@@ -23,6 +23,10 @@ import java.security.SecureRandom
  * the engine holds it until it is told the message is stored here. So a write is on the
  * disk before [add] returns (`synchronous = FULL`), and each such message is stored with
  * the engine's ID for it (`received`), which is how one handed over twice is stored once.
+ *
+ * A message written on this phone is stored with the engine's ID for it (`sending`) for
+ * as long as the server has not taken it. When the server has, the ID is cleared. If the
+ * server never will, the ID is cleared and the reason is stored instead (`problem`).
  */
 class MessageDb(directory: File, vault: Vault) {
     private val db: SQLiteDatabase
@@ -58,10 +62,11 @@ class MessageDb(directory: File, vault: Vault) {
                     opened.execSQL(
                         "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, slot INTEGER NOT NULL, channel TEXT NOT NULL, " +
                             "mine INTEGER NOT NULL, name TEXT NOT NULL, body TEXT NOT NULL, sent INTEGER NOT NULL, unreadable INTEGER NOT NULL, " +
-                            "received TEXT)",
+                            "received TEXT, sending TEXT, problem TEXT)",
                     )
                     opened.execSQL("CREATE INDEX messages_by_channel ON messages (slot, channel, id)")
                     opened.execSQL(RECEIVED_INDEX)
+                    opened.execSQL(SENDING_INDEX)
                     opened.execSQL("CREATE TABLE unread (slot INTEGER NOT NULL, channel TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (slot, channel))")
                     opened.version = VERSION
                     opened.setTransactionSuccessful()
@@ -78,6 +83,19 @@ class MessageDb(directory: File, vault: Vault) {
                 try {
                     opened.execSQL("ALTER TABLE messages ADD COLUMN received TEXT")
                     opened.execSQL(RECEIVED_INDEX)
+                    opened.version = 2
+                    opened.setTransactionSuccessful()
+                } finally {
+                    opened.endTransaction()
+                }
+            }
+            if (opened.version == 2) {
+                // Up to here a message written on this phone was taken to have been sent.
+                opened.beginTransaction()
+                try {
+                    opened.execSQL("ALTER TABLE messages ADD COLUMN sending TEXT")
+                    opened.execSQL("ALTER TABLE messages ADD COLUMN problem TEXT")
+                    opened.execSQL(SENDING_INDEX)
                     opened.version = VERSION
                     opened.setTransactionSuccessful()
                 } finally {
@@ -102,11 +120,14 @@ class MessageDb(directory: File, vault: Vault) {
      * left out for one written on this phone. Null comes back if that message is here
      * already, and nothing is stored.
      *
+     * [sending] is the engine's ID for a message written on this phone, which the server
+     * has yet to take.
+     *
      * [unread], if given, becomes the channel's count of unread messages in the same
      * step: the message and the count are both stored, or neither is.
      */
     @Synchronized
-    fun add(slot: Int, channel: String, message: MessageUi, received: String? = null, unread: Int? = null): MessageUi? {
+    fun add(slot: Int, channel: String, message: MessageUi, received: String? = null, unread: Int? = null, sending: String? = null): MessageUi? {
         db.beginTransaction()
         try {
             if (received != null) {
@@ -116,6 +137,7 @@ class MessageDb(directory: File, vault: Vault) {
             }
             val values = row(slot, channel, message)
             if (received != null) values.put("received", received)
+            if (sending != null) values.put("sending", sending)
             val id = db.insertOrThrow("messages", null, values)
             if (unread != null) setUnread(slot, channel, unread)
             db.setTransactionSuccessful()
@@ -132,7 +154,7 @@ class MessageDb(directory: File, vault: Vault) {
     fun page(slot: Int, channel: String, before: Long = Long.MAX_VALUE, limit: Int): List<MessageUi> {
         val found = ArrayList<MessageUi>()
         db.rawQuery(
-            "SELECT id, mine, name, body, sent, unreadable FROM messages WHERE slot = ? AND channel = ? AND id < ? ORDER BY id DESC LIMIT ?",
+            "SELECT id, mine, name, body, sent, unreadable, sending, problem FROM messages WHERE slot = ? AND channel = ? AND id < ? ORDER BY id DESC LIMIT ?",
             slot, channel, before, limit,
         ).use { rows ->
             while (rows.moveToNext()) {
@@ -143,10 +165,49 @@ class MessageDb(directory: File, vault: Vault) {
                     text = rows.getString(3),
                     sent = rows.getLong(4),
                     unreadable = rows.getInt(5) != 0,
+                    sending = when {
+                        !rows.isNull(7) -> Sending.NotSent
+                        !rows.isNull(6) -> Sending.Waiting
+                        else -> Sending.Sent
+                    },
+                    problem = if (rows.isNull(7)) null else rows.getString(7),
                 )
             }
         }
         return found.asReversed()
+    }
+
+    /** A message written on this phone that the server had not taken when this was last written down. */
+    class Unsettled(val id: Long, val channel: String, val sending: String)
+
+    /** Every message of a server's that is stored as waiting to be sent. */
+    @Synchronized
+    fun waiting(slot: Int): List<Unsettled> {
+        val found = ArrayList<Unsettled>()
+        db.rawQuery("SELECT id, channel, sending FROM messages WHERE slot = ? AND sending IS NOT NULL", slot).use { rows ->
+            while (rows.moveToNext()) found += Unsettled(rows.getLong(0), rows.getString(1), rows.getString(2))
+        }
+        return found
+    }
+
+    /**
+     * Writes down what became of a message that was waiting to be sent: the server has
+     * taken it ([problem] is null), or never will, and [problem] says why.
+     */
+    @Synchronized
+    fun settle(id: Long, problem: String?) {
+        db.execSQL("UPDATE messages SET sending = NULL, problem = ? WHERE id = ?", arrayOf<Any?>(problem, id))
+    }
+
+    /** The engine's ID for a message that is stored as waiting to be sent. Null for any other message. */
+    @Synchronized
+    fun sendingId(id: Long): String? =
+        db.rawQuery("SELECT sending FROM messages WHERE id = ?", id).use { rows -> if (rows.moveToFirst() && !rows.isNull(0)) rows.getString(0) else null }
+
+    /** Deletes one message. */
+    @Synchronized
+    fun delete(id: Long) {
+        db.execSQL("DELETE FROM messages WHERE id = ?", arrayOf<Any>(id))
     }
 
     /** Every channel of a server that has history here, with its count of unread messages. */
@@ -230,9 +291,12 @@ class MessageDb(directory: File, vault: Vault) {
         const val FILE = "messages.db"
         const val KEY_FILE = "messages.key"
         const val KEY_BYTES = 32
-        const val VERSION = 2
+        const val VERSION = 3
 
         // Rows written on this phone, and rows from before version 2, have no such ID.
         const val RECEIVED_INDEX = "CREATE UNIQUE INDEX messages_received ON messages (slot, received) WHERE received IS NOT NULL"
+
+        // Only the few rows still waiting to be sent are in this one.
+        const val SENDING_INDEX = "CREATE INDEX messages_sending ON messages (slot) WHERE sending IS NOT NULL"
     }
 }

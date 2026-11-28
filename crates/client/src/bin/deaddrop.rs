@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use deaddrop_client::{Account, ClientError, Event, Link, Wake, WayIn};
+use deaddrop_client::{Account, ClientError, Event, Link, Wake, WayIn, Why};
 use deaddrop_core::encoding::{b64, unb64};
 use deaddrop_core::soft::SoftDevice;
 use serde_json::{Value, json};
@@ -101,11 +101,37 @@ impl State {
         })
     }
 
-    fn send(&mut self, channel: &str, text: &str) -> Result<bool, ClientError> {
+    /// Hands the engine a message and has it try the server at once. Returns the
+    /// message's ID, by which the engine says what became of it.
+    fn send(&mut self, channel: &str, text: &str) -> Result<String, ClientError> {
         let (path, keys) = (&self.path, &self.keys);
-        self.account.send(keys, channel, text, &mut |bytes| {
+        let mut save = |bytes: &[u8]| {
             let _ = store(path, keys, bytes);
-        })
+        };
+        let id = self.account.send(channel, text, &mut save)?;
+        self.account.flush(keys, &mut save)?;
+        Ok(id)
+    }
+
+    /// Says which messages the server has refused for good. Saying so is all this
+    /// client does about one, so it then tells the engine they are dealt with.
+    fn report_not_sent(&mut self) {
+        let refused = self.account.not_sent().to_vec();
+        for message in &refused {
+            let channel =
+                self.account.channel(&message.channel).map_or(message.channel.clone(), |held| held.name.clone());
+            let why = match &message.why {
+                Why::NotInChannel => "this device is no longer in that channel".to_owned(),
+                Why::TooLarge => "it is too large".to_owned(),
+                Why::Other(why) => why.clone(),
+            };
+            println!("A message to {channel} was NOT sent: {why}.");
+        }
+        if !refused.is_empty() {
+            let ids: Vec<String> = refused.into_iter().map(|message| message.id).collect();
+            self.account.stored(&ids);
+            let _ = self.save();
+        }
     }
 
     /// Prints what a sync returned. Printing is all this client does with a message,
@@ -130,6 +156,7 @@ impl State {
             self.account.stored(&printed);
             let _ = self.save();
         }
+        self.report_not_sent();
     }
 }
 
@@ -177,7 +204,7 @@ fn status(account: &Account) {
         println!("\nAsked to join {channel}; waiting for its owner.");
     }
     if account.unsent() > 0 {
-        println!("\n{} sealed message(s) waiting to be sent.", account.unsent());
+        println!("\n{} message(s) or key hand-over(s) waiting for the server to take them.", account.unsent());
     }
 }
 
@@ -301,9 +328,11 @@ fn run() -> Result<(), String> {
             if text.is_empty() {
                 return Err(fail("send needs some text"));
             }
-            if !state.send(&channel, &text).map_err(fail)? {
-                println!("The server cannot be reached. The message is sealed and will go with the next `receive`.");
+            let id = state.send(&channel, &text).map_err(fail)?;
+            if state.account.waiting().contains(&id) {
+                println!("The server has not taken the message. It is kept, and goes with the next `receive`.");
             }
+            state.report_not_sent();
         }
         "receive" => {
             let events = state.sync().map_err(fail)?;

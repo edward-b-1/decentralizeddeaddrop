@@ -17,7 +17,7 @@ pub mod live;
 use deaddrop_core::encoding::b64;
 use deaddrop_core::soft::SoftDevice;
 
-pub use account::{Account, Channel, Event, JoinRequest, Save, ServerDevice, WayIn, WaysIn};
+pub use account::{Account, Channel, Event, JoinRequest, NotSent, Save, ServerDevice, WayIn, WaysIn, Why};
 pub use link::{ChannelInvite, Link, ServerAddress};
 pub use live::{Live, Wake};
 

@@ -8,6 +8,7 @@ import com.decentralizeddeaddrop.engine.News
 import com.decentralizeddeaddrop.engine.Session
 import com.decentralizeddeaddrop.engine.StateStore
 import com.decentralizeddeaddrop.engine.WaysInInfo
+import com.decentralizeddeaddrop.engine.WhyNotSent
 import com.decentralizeddeaddrop.engine.readLink
 import com.decentralizeddeaddrop.keys.DeviceKeys
 import com.decentralizeddeaddrop.keys.Vault
@@ -48,6 +49,8 @@ data class ChannelUi(
     val members: List<MemberUi>,
     val lastLine: String,
     val lastTime: Long,
+    /** How far the last message has got, if it was written on this phone. [lastLine] is then its text alone. */
+    val lastSending: Sending,
     val unread: Int,
     /** For the owner: how many people are asking to join. */
     val asking: Int,
@@ -81,6 +84,18 @@ data class ServerUi(
     val waiting: List<String>,
 )
 
+/** How far a message written on this phone has got. A message from someone else is always [Sent]. */
+enum class Sending {
+    /** The server has it. This says nothing about who has collected it. */
+    Sent,
+
+    /** Kept on this phone until the server takes it: no signal, or the server is in trouble. It goes by itself. */
+    Waiting,
+
+    /** The server will never take it. Nobody else has it. */
+    NotSent,
+}
+
 data class MessageUi(
     /** Its place in this phone's history. 0 until it has been stored. */
     val id: Long = 0,
@@ -91,7 +106,15 @@ data class MessageUi(
     val sent: Long,
     /** A message that arrived but could not be opened. */
     val unreadable: Boolean = false,
-)
+    val sending: Sending = Sending.Sent,
+    /** Why it was not sent: [NOT_IN_CHANNEL], [TOO_LARGE], or the engine's own words. */
+    val problem: String? = null,
+) {
+    companion object {
+        const val NOT_IN_CHANNEL = "not-in-channel"
+        const val TOO_LARGE = "too-large"
+    }
+}
 
 /**
  * Every server this phone is on. Each has its own identity, its own engine session and
@@ -124,6 +147,14 @@ object Servers {
 
         /** Devices whose safety number the person holding this phone has compared. */
         val verified: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+        /**
+         * Held while a message is handed to the engine and written into the history, and
+         * while the history is brought into line with the engine ([settle]). Without it,
+         * a message the engine had just taken, and the history did not yet hold, could be
+         * settled before it was there to settle.
+         */
+        val outgoing = Any()
     }
 
     /** Writes the engine's state the moment the engine asks, before it goes on. */
@@ -215,10 +246,12 @@ object Servers {
                         lastLine = when {
                             last == null -> ""
                             last.unreadable -> "A message could not be read"
+                            last.sending != Sending.Sent -> last.text
                             last.mine -> "You: ${last.text}"
                             else -> "${last.name}: ${last.text}"
                         },
                         lastTime = last?.sent ?: 0,
+                        lastSending = last?.sending ?: Sending.Sent,
                         unread = history?.unread ?: 0,
                         asking = if (channel.ownedByMe && !channel.unlisted) entry.asking[channel.id] ?: 0 else 0,
                         unlisted = channel.unlisted,
@@ -240,15 +273,16 @@ object Servers {
     /**
      * Stores a message and shows it. [received] is the engine's ID for a message that
      * came from the server. False means that message was stored already: the engine hands
-     * one over again if the app stopped before saying it had it.
+     * one over again if the app stopped before saying it had it. [sending] is the engine's
+     * ID for a message written on this phone.
      */
-    private fun record(entry: Entry, channel: String, message: MessageUi, received: String? = null): Boolean {
+    private fun record(entry: Entry, channel: String, message: MessageUi, received: String? = null, sending: String? = null): Boolean {
         val history = entry.history.getOrPut(channel) { History() }
         synchronized(history) {
             // Read at once only if its channel is on screen and the screen is being looked at.
             val unread = !message.mine && (open != "${entry.slot}/$channel" || !Notifier.appVisible)
             val count = if (unread) history.unread + 1 else null
-            history.messages += db.add(entry.slot, channel, message, received, count) ?: return false
+            history.messages += db.add(entry.slot, channel, message, received, count, sending) ?: return false
             if (count != null) history.unread = count
         }
         return true
@@ -338,6 +372,42 @@ object Servers {
     }
 
     /**
+     * Brings the history into line with what the engine says became of the messages
+     * written on this phone. Each one stored as waiting is, by the engine's account,
+     * still waiting, or refused for good, or neither: and neither means the server has it.
+     *
+     * A refusal is written into the history before the engine is told it may forget it,
+     * so stopping in between only means it is written again next time.
+     */
+    private fun settle(entry: Entry) {
+        synchronized(entry.outgoing) {
+            val unsettled = db.waiting(entry.slot)
+            val unsent = entry.session.unsent()
+            val waiting = unsent.waiting.toSet()
+            val refused = unsent.notSent.associate { refusal ->
+                refusal.id to when (val why = refusal.why) {
+                    is WhyNotSent.NotInChannel -> MessageUi.NOT_IN_CHANNEL
+                    is WhyNotSent.TooLarge -> MessageUi.TOO_LARGE
+                    is WhyNotSent.Other -> why.message
+                }
+            }
+            for (row in unsettled) {
+                val problem = refused[row.sending]
+                if (problem == null && row.sending in waiting) continue
+                db.settle(row.id, problem)
+                val history = entry.history[row.channel] ?: continue
+                synchronized(history) {
+                    val at = history.messages.indexOfFirst { it.id == row.id }
+                    if (at >= 0) {
+                        history.messages[at] = history.messages[at].copy(sending = if (problem == null) Sending.Sent else Sending.NotSent, problem = problem)
+                    }
+                }
+            }
+            if (refused.isNotEmpty()) entry.session.stored(refused.keys.toList())
+        }
+    }
+
+    /**
      * What is waiting on the person holding this phone: people asking to join channels
      * they own, and devices to approve if they run the server. The server says when
      * either changes, so this follows every sync.
@@ -361,12 +431,15 @@ object Servers {
             while (!entry.stopped) {
                 try {
                     take(entry, entry.session.sync())
+                    settle(entry)
                     lookAround(entry)
                     entry.connection = Connection.Connected
                     pause = FIRST_RETRY_MS
                     publish()
                     while (!entry.stopped && !entry.session.waitForNews(25u)) {
-                        // Quiet. Keep waiting.
+                        // Quiet. Keep waiting, unless something is still waiting to go: the
+                        // server can be reached, yet would not take it last time. Offer it again.
+                        if (entry.session.unsent().queued > 0u) break
                     }
                 } catch (waiting: EngineException.AwaitingApproval) {
                     entry.connection = Connection.AwaitingApproval
@@ -380,6 +453,8 @@ object Servers {
                     // Messages may have been opened before whatever failed. The engine
                     // holds them; store and show them now, not after the next success.
                     runCatching { take(entry, entry.session.received()) }
+                    // Likewise what was sent, or refused, before it.
+                    runCatching { settle(entry) }
                     entry.connection = Connection.Reconnecting
                     runCatching { publish() }
                     Thread.sleep(pause)
@@ -528,12 +603,82 @@ object Servers {
         db.forgetChannel(slot, channel)
     }
 
-    /** Sends a message. It appears in the conversation at once; the engine keeps it safe until the server has it. */
+    /**
+     * Sends a message. The engine takes it and keeps it, and it appears in the
+     * conversation at once, as waiting to be sent. Sending it is then tried in the
+     * background, and the history is brought into line with the outcome: the server has
+     * it, or it is still waiting (and goes with a later collection), or it was refused.
+     */
     suspend fun send(slot: Int, channel: String, text: String) = withContext(Dispatchers.IO) {
         val entry = entry(slot)
-        entry.session.send(channel, text)
-        record(entry, channel, MessageUi(mine = true, name = "You", text = text, sent = System.currentTimeMillis() / 1000))
+        synchronized(entry.outgoing) {
+            val id = entry.session.send(channel, text)
+            val message = MessageUi(mine = true, name = "You", text = text, sent = System.currentTimeMillis() / 1000, sending = Sending.Waiting)
+            record(entry, channel, message, sending = id)
+        }
         publish()
+        thread(name = "send-$slot") {
+            runCatching { entry.session.flush() }
+            runCatching { settle(entry) }
+            runCatching { publish() }
+        }
+    }
+
+    /** How far a message in the history has got, as it stands now. Null if it is not among those read in. */
+    private fun sendingOf(entry: Entry, channel: String, id: Long): Sending? {
+        val history = entry.history[channel] ?: return null
+        return synchronized(history) { history.messages.firstOrNull { it.id == id }?.sending }
+    }
+
+    /**
+     * Tries at once to send what is waiting on a server, for someone who would sooner not
+     * wait for the next try. Says so if the message they asked about has still not gone.
+     */
+    suspend fun sendNow(key: String, id: Long) = withContext(Dispatchers.IO) {
+        val (slot, channel) = key.split("/", limit = 2).let { it[0].toInt() to it[1] }
+        val entry = entry(slot)
+        runCatching { entry.session.flush() }
+        settle(entry)
+        publish()
+        if (sendingOf(entry, channel, id) == Sending.Waiting) {
+            throw IllegalStateException("It has still not gone. The server cannot be reached, or would not take it just now. It stays waiting, and is tried again by itself.")
+        }
+    }
+
+    /** Sends again, as a new message, one that was not sent. The old one is cleared away once the engine has the new one. */
+    suspend fun sendAgain(key: String, id: Long, text: String) {
+        val (slot, channel) = key.split("/", limit = 2).let { it[0].toInt() to it[1] }
+        send(slot, channel, text)
+        deleteMessage(key, id)
+    }
+
+    /**
+     * Takes one of the person's own messages off this phone: one that was not sent, or
+     * one still waiting to be sent, which is taken back from the engine first so that it
+     * never goes. If it turns out to have gone already, it is kept, and the person is told.
+     */
+    suspend fun deleteMessage(key: String, id: Long) = withContext(Dispatchers.IO) {
+        val (slot, channel) = key.split("/", limit = 2).let { it[0].toInt() to it[1] }
+        val entry = entries[slot] ?: return@withContext
+        val history = entry.history[channel] ?: return@withContext
+        val gone = synchronized(entry.outgoing) {
+            val sending = db.sendingId(id)
+            if (sending != null && !entry.session.cancel(sending)) {
+                // Too late to take back: the engine no longer has it waiting. Find out which way it went.
+                settle(entry)
+            }
+            if (sendingOf(entry, channel, id) == Sending.Sent) {
+                true
+            } else {
+                synchronized(history) {
+                    db.delete(id)
+                    history.messages.removeAll { it.id == id }
+                }
+                false
+            }
+        }
+        publish()
+        if (gone) throw IllegalStateException("That message had already gone: the server has it. It was not deleted.")
     }
 
     // For the phone that runs a server.
