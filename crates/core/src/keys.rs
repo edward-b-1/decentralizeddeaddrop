@@ -4,6 +4,7 @@
 //! DER SubjectPublicKeyInfo and signatures as ASN.1 DER ECDSA over SHA-256, which is
 //! exactly what Android's `SHA256withECDSA` produces.
 
+use hmac::{Hmac, KeyInit, Mac};
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 use p256::pkcs8::DecodePublicKey;
@@ -45,6 +46,31 @@ pub fn session_message(server_id: &str, challenge: &str) -> Vec<u8> {
     format!("deaddrop/session/v1\n{server_id}\n{challenge}").into_bytes()
 }
 
+fn join_mac(secret: &str, channel: &str, device: &str, name: &str) -> Hmac<Sha256> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC takes a key of any length");
+    // The name comes last because it is the one part that is free text.
+    mac.update(format!("deaddrop/join/v1\n{channel}\n{device}\n{name}").as_bytes());
+    mac
+}
+
+/// The stamp a device puts on its request to join a channel: HMAC-SHA256, keyed with
+/// the secret in the invite it holds, over the channel, its own device ID and the name
+/// it asks for. Base64.
+///
+/// The secret travels inside the invite, from the owner's phone to the joiner's, and is
+/// never sent to the server. So a stamp that checks out tells the owner's phone that
+/// this device, under this name, is asking with an invite the owner made; a server can
+/// neither make one nor move one to another device or name.
+pub fn join_stamp(secret: &str, channel: &str, device: &str, name: &str) -> String {
+    b64(&join_mac(secret, channel, device, name).finalize().into_bytes())
+}
+
+/// Whether `stamp` is the [`join_stamp`] for exactly this secret, channel, device and name.
+pub fn join_stamp_matches(secret: &str, channel: &str, device: &str, name: &str, stamp: &str) -> bool {
+    let Some(stamp) = crate::encoding::unb64(stamp) else { return false };
+    join_mac(secret, channel, device, name).verify_slice(&stamp).is_ok()
+}
+
 /// The safety number two devices share: thirty digits in six groups, the same on both
 /// phones whichever way round they are asked.
 ///
@@ -65,6 +91,23 @@ pub fn safety_number(one: &str, other: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_join_stamp_fits_one_secret_channel_device_and_name() {
+        let stamp = join_stamp("secret", "channel", "device", "Ben");
+        assert!(join_stamp_matches("secret", "channel", "device", "Ben", &stamp));
+        assert!(!join_stamp_matches("other", "channel", "device", "Ben", &stamp));
+        assert!(!join_stamp_matches("secret", "elsewhere", "device", "Ben", &stamp));
+        assert!(!join_stamp_matches("secret", "channel", "another", "Ben", &stamp));
+        assert!(!join_stamp_matches("secret", "channel", "device", "Bob", &stamp));
+        assert!(!join_stamp_matches("secret", "channel", "device", "Ben", ""));
+        assert!(!join_stamp_matches("secret", "channel", "device", "Ben", "not base64!"));
+        // RFC 4231 test case 2 pins the construction: HMAC-SHA256, nothing home-made.
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"Jefe").unwrap();
+        mac.update(b"what do ya want for nothing?");
+        let hex: String = mac.finalize().into_bytes().iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(hex, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+    }
 
     #[test]
     fn a_safety_number_is_the_same_from_both_ends_and_differs_for_anyone_else() {

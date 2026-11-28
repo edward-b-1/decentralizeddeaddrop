@@ -1,16 +1,19 @@
 //! `deaddrop://` links: what a QR code or a pasted invite holds.
 //!
 //! ```text
-//! deaddrop://HOST:PORT/#fp=<fingerprint>[&t=<server token>][&c=<channel>&o=<owner>&ct=<channel token>]
+//! deaddrop://HOST:PORT/#fp=<fingerprint>[&t=<server token>][&c=<channel>&o=<owner>&ct=<channel token>&cs=<secret>]
 //! ```
 //!
 //! - `fp`: the server's fingerprint. With it the app recognises the server by itself.
 //! - `t`: a token that lets a new device onto the server.
-//! - `c`, `o`, `ct`: an invite to a channel: its ID, its owner's device ID, and a token
-//!   that lets the holder ask to join. The owner's ID is what lets the joiner check that
-//!   the channel they are shown really is the one they were invited to.
+//! - `c`, `o`, `ct`, `cs`: an invite to a channel: its ID, its owner's device ID, a token
+//!   that lets the holder ask to join, and a secret. The owner's ID is what lets the
+//!   joiner check that the channel they are shown really is the one they were invited
+//!   to. The secret is what lets the owner's phone check that a request to join comes
+//!   from someone holding this invite (`keys::join_stamp`).
 //!
-//! Everything after `#` stays on the phone: it is never part of any request.
+//! The link itself is never part of any request. The two tokens are what the phone
+//! shows the server. The secret is never shown to it.
 
 use deaddrop_core::encoding::{ID_LEN, TOKEN_LEN, is_base32};
 use deaddrop_core::keys::DEVICE_ID_LEN;
@@ -37,7 +40,10 @@ impl ServerAddress {
 pub struct ChannelInvite {
     pub channel: String,
     pub owner: String,
+    /// Shown to the server, which lets its holder ask to join.
     pub token: String,
+    /// Never shown to the server: keys the stamp on the request to join.
+    pub secret: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,7 +67,7 @@ impl Link {
         }
 
         let (mut fingerprint, mut server_token) = (None, None);
-        let (mut channel, mut owner, mut channel_token) = (None, None, None);
+        let (mut channel, mut owner, mut channel_token, mut secret) = (None, None, None, None);
         for pair in fragment.split('&') {
             let (key, value) = pair.split_once('=')?;
             let slot = match key {
@@ -70,6 +76,7 @@ impl Link {
                 "c" => &mut channel,
                 "o" => &mut owner,
                 "ct" => &mut channel_token,
+                "cs" => &mut secret,
                 // Unknown parts are ignored so that newer links still open.
                 _ => continue,
             };
@@ -79,12 +86,15 @@ impl Link {
         if server_token.as_ref().is_some_and(|token| !is_base32(token, TOKEN_LEN)) {
             return None;
         }
-        let channel = match (channel, owner, channel_token) {
-            (None, None, None) => None,
-            (Some(channel), Some(owner), Some(token))
-                if is_base32(&channel, ID_LEN) && is_base32(&owner, DEVICE_ID_LEN) && is_base32(&token, TOKEN_LEN) =>
+        let channel = match (channel, owner, channel_token, secret) {
+            (None, None, None, None) => None,
+            (Some(channel), Some(owner), Some(token), Some(secret))
+                if is_base32(&channel, ID_LEN)
+                    && is_base32(&owner, DEVICE_ID_LEN)
+                    && is_base32(&token, TOKEN_LEN)
+                    && is_base32(&secret, TOKEN_LEN) =>
             {
-                Some(ChannelInvite { channel, owner, token })
+                Some(ChannelInvite { channel, owner, token, secret })
             }
             _ => return None,
         };
@@ -99,7 +109,7 @@ impl std::fmt::Display for Link {
             write!(f, "&t={token}")?;
         }
         if let Some(invite) = &self.channel {
-            write!(f, "&c={}&o={}&ct={}", invite.channel, invite.owner, invite.token)?;
+            write!(f, "&c={}&o={}&ct={}&cs={}", invite.channel, invite.owner, invite.token, invite.secret)?;
         }
         Ok(())
     }
@@ -113,6 +123,7 @@ mod tests {
     const TOKEN: &str = "abcdefghijklmnopqrstuvwxyz234567";
     const CHANNEL: &str = "abcdefghijklmnopqrstuvwxyz";
     const OWNER: &str = "t2n6vrwrnowcmdaw";
+    const SECRET: &str = "765432zyxwvutsrqponmlkjihgfedcba";
 
     #[test]
     fn a_server_link_round_trips() {
@@ -126,10 +137,11 @@ mod tests {
 
     #[test]
     fn a_channel_invite_round_trips() {
-        let text = format!("deaddrop://chat.example.org:443/#fp={FP}&c={CHANNEL}&o={OWNER}&ct={TOKEN}");
+        let text = format!("deaddrop://chat.example.org:443/#fp={FP}&c={CHANNEL}&o={OWNER}&ct={TOKEN}&cs={SECRET}");
         let link = Link::parse(&text).unwrap();
         let invite = link.channel.clone().unwrap();
         assert_eq!((invite.channel.as_str(), invite.owner.as_str(), invite.token.as_str()), (CHANNEL, OWNER, TOKEN));
+        assert_eq!(invite.secret, SECRET);
         assert_eq!(link.server_token, None);
         assert_eq!(link.to_string(), text);
         // IPv6 addresses, surrounding spaces and unknown parts are all fine.
@@ -149,9 +161,11 @@ mod tests {
             format!("deaddrop://evil.example/path@203.0.113.7:7443/#fp={FP}"),
             format!("deaddrop://203.0.113.7:7443/#fp={}", &FP[1..]),
             format!("deaddrop://203.0.113.7:7443/#fp={FP}&t=short"),
-            // A channel invite needs all three of its parts.
-            format!("deaddrop://203.0.113.7:7443/#fp={FP}&c={CHANNEL}&ct={TOKEN}"),
-            format!("deaddrop://203.0.113.7:7443/#fp={FP}&c={CHANNEL}&o=not-an-id&ct={TOKEN}"),
+            // A channel invite needs all four of its parts.
+            format!("deaddrop://203.0.113.7:7443/#fp={FP}&c={CHANNEL}&ct={TOKEN}&cs={SECRET}"),
+            format!("deaddrop://203.0.113.7:7443/#fp={FP}&c={CHANNEL}&o=not-an-id&ct={TOKEN}&cs={SECRET}"),
+            format!("deaddrop://203.0.113.7:7443/#fp={FP}&c={CHANNEL}&o={OWNER}&ct={TOKEN}"),
+            format!("deaddrop://203.0.113.7:7443/#fp={FP}&c={CHANNEL}&o={OWNER}&ct={TOKEN}&cs=short"),
         ] {
             assert_eq!(Link::parse(&bad), None, "{bad}");
         }

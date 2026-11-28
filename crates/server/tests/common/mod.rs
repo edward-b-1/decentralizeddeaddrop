@@ -161,12 +161,14 @@ impl Server {
         id
     }
 
-    /// `phone` asks to join `channel` with a fresh invite from `owner`.
+    /// `phone` asks to join `channel` with a fresh invite from `owner`. The stamp
+    /// stands in for the one a phone makes with the invite's secret: the server keeps
+    /// it and hands it on, and has no means of checking it.
     pub async fn ask_to_join(&self, owner: &Phone, channel: &str, phone: &Phone, name: &str) {
         let path = format!("/v1/channels/{channel}/invites");
         let (status, reply) = self.as_phone(owner, POST, &path, Some(json!({}))).await;
         assert_eq!(status, StatusCode::CREATED);
-        let body = json!({ "token": reply["token"], "name": name });
+        let body = json!({ "token": reply["token"], "name": name, "stamp": format!("stamp of {name}") });
         let (status, _) =
             self.as_phone(phone, POST, &format!("/v1/channels/{channel}/join-requests"), Some(body)).await;
         assert_eq!(status, StatusCode::ACCEPTED);

@@ -81,10 +81,20 @@ async fn joining_needs_an_invite_and_the_owners_signature() {
     let (_, reply) =
         server.as_phone(&owner, POST, &format!("/v1/channels/{other_channel}/invites"), Some(json!({}))).await;
     for token in [json!(""), json!("made-up"), reply["token"].clone()] {
-        let body = json!({ "token": token, "name": "Joiner" });
+        let body = json!({ "token": token, "name": "Joiner", "stamp": "a stamp" });
         let (status, _) = server.as_phone(&joiner, POST, &requests_path, Some(body)).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
     }
+    // A request carries the invite's stamp, for the owner's phone to check. Without
+    // one it is not taken, and the invite is not used up.
+    let (_, reply) = server.as_phone(&owner, POST, &format!("/v1/channels/{channel}/invites"), Some(json!({}))).await;
+    for stamp in [json!(""), json!("x".repeat(65))] {
+        let body = json!({ "token": reply["token"], "name": "Joiner", "stamp": stamp });
+        assert_eq!(server.as_phone(&joiner, POST, &requests_path, Some(body)).await.0, StatusCode::BAD_REQUEST);
+    }
+    let body = json!({ "token": reply["token"], "name": "Joiner" });
+    assert!(server.as_phone(&joiner, POST, &requests_path, Some(body)).await.0.is_client_error());
+    assert_eq!((server.rows("join_requests").await, server.rows("tokens").await), (0, 2));
     // Only the owner can make invites.
     let (status, _) = server.as_phone(&joiner, POST, &format!("/v1/channels/{channel}/invites"), Some(json!({}))).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -101,6 +111,7 @@ async fn joining_needs_an_invite_and_the_owners_signature() {
     let (_, list) = server.as_phone(&owner, GET, &requests_path, None).await;
     let request = &list["requests"][0];
     assert_eq!((&request["device_id"], &request["name"]), (&json!(joiner.id), &json!("Joiner")));
+    assert_eq!(request["stamp"], json!("stamp of Joiner"), "handed to the owner as it was given");
     let key = unb64(request["signing_key"].as_str().unwrap()).unwrap();
     assert_eq!(keys::device_id(&key), joiner.id);
 
@@ -120,7 +131,7 @@ async fn joining_needs_an_invite_and_the_owners_signature() {
 
     // A member cannot ask again.
     let (_, reply) = server.as_phone(&owner, POST, &format!("/v1/channels/{channel}/invites"), Some(json!({}))).await;
-    let body = json!({ "token": reply["token"], "name": "Joiner" });
+    let body = json!({ "token": reply["token"], "name": "Joiner", "stamp": "a stamp" });
     assert_eq!(server.as_phone(&joiner, POST, &requests_path, Some(body)).await.0, StatusCode::CONFLICT);
 }
 

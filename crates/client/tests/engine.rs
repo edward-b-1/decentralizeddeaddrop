@@ -816,3 +816,78 @@ fn a_channel_the_server_no_longer_shows_is_the_persons_to_take_off_their_phone()
     assert!(cara.account.channel(&id).is_none());
     assert!(!cara.sync().contains(&Event::ChannelsChanged));
 }
+
+#[test]
+fn only_a_device_holding_the_invite_is_let_in_and_under_the_name_it_asked_for() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let eve = Person::invited_by(&mut anna);
+    let id = anna.account.create_channel(&anna.keys, "Family", "Anna", 3600).unwrap();
+    let (ben_id, eve_id) = (ben.account.device().to_owned(), eve.account.device().to_owned());
+
+    // Anna makes an invite, and her app is closed and opened again before anyone uses it.
+    let link = anna.account.invite_to_channel(&anna.keys, &id, 1, 3600).unwrap();
+    anna.stored = anna.account.to_bytes();
+    anna.restart();
+    ben.account.ask_to_join(&ben.keys, &link, "Ben").unwrap();
+    server.tamper("CREATE TABLE asked AS SELECT * FROM join_requests".into());
+    let nobody = |anna: &mut Person| anna.account.join_requests(&anna.keys, &id).unwrap().is_empty();
+
+    // The server puts Eve's device where Ben's was, keeping his name and his stamp.
+    server.tamper(format!("UPDATE join_requests SET device = '{eve_id}'"));
+    assert!(nobody(&mut anna), "the stamp is for Ben's device, not Eve's");
+    assert_eq!(server.rows("join_requests"), 0, "and what cannot be let in is declined");
+    let refused = anna.account.admit(&anna.keys, &id, &eve_id);
+    assert!(matches!(refused, Err(ClientError::Refused { status: 404, .. })), "{refused:?}");
+
+    // It makes a request up for Eve, and it gives Ben's request another name.
+    server.tamper(format!("INSERT INTO join_requests VALUES ('{id}', '{eve_id}', 'Ben', 'bm90IGEgc3RhbXA=')"));
+    assert!(nobody(&mut anna));
+    server.tamper("INSERT INTO join_requests SELECT * FROM asked; UPDATE join_requests SET name = 'Bob'".into());
+    assert!(nobody(&mut anna), "the stamp is for the name Ben asked for");
+    assert_eq!(anna.account.channel(&id).unwrap().members.len(), 1, "nobody was let in");
+
+    // Ben's request as he made it is shown, and lets him in.
+    server.tamper("INSERT INTO join_requests SELECT * FROM asked".into());
+    let requests = anna.account.join_requests(&anna.keys, &id).unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!((requests[0].device.as_str(), requests[0].name.as_str()), (ben_id.as_str(), "Ben"));
+    anna.account.admit(&anna.keys, &id, &ben_id).unwrap();
+    ben.sync();
+    assert_eq!(anna.send(&id, "welcome"), Ok(true));
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: welcome"]);
+
+    // The invite is spent. Once Anna has taken Ben out, his old request, played
+    // again by the server, is not a way back in.
+    anna.account.remove(&anna.keys, &id, &ben_id).unwrap();
+    server.tamper("INSERT INTO join_requests SELECT * FROM asked".into());
+    assert!(nobody(&mut anna));
+}
+
+#[test]
+fn an_invite_made_for_two_lets_two_in_and_no_more() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let mut dan = Person::invited_by(&mut anna);
+    let id = anna.account.create_channel(&anna.keys, "Family", "Anna", 3600).unwrap();
+    let link = anna.account.invite_to_channel(&anna.keys, &id, 2, 3600).unwrap();
+    server.tamper(format!("CREATE TABLE spent AS SELECT * FROM tokens WHERE scope = '{id}'"));
+
+    ben.account.ask_to_join(&ben.keys, &link, "Ben").unwrap();
+    anna.account.admit(&anna.keys, &id, ben.account.device()).unwrap();
+    cara.account.ask_to_join(&cara.keys, &link, "Cara").unwrap();
+    anna.account.admit(&anna.keys, &id, cara.account.device()).unwrap();
+    assert_eq!(anna.account.channel(&id).unwrap().members.len(), 3);
+
+    // The server will not take the invite a third time. Were it to (here, by being
+    // made to), Anna's phone would not: the invite has let in the two it was made for.
+    let refused = dan.account.ask_to_join(&dan.keys, &link, "Dan");
+    assert!(matches!(refused, Err(ClientError::Refused { status: 403, .. })), "{refused:?}");
+    server.tamper("INSERT INTO tokens SELECT hash, scope, 1, expires FROM spent".into());
+    dan.account.ask_to_join(&dan.keys, &link, "Dan").unwrap();
+    assert!(anna.account.join_requests(&anna.keys, &id).unwrap().is_empty());
+    assert_eq!(server.rows("join_requests"), 0);
+}

@@ -355,6 +355,10 @@ pub struct Ask {
     token: String,
     /// The name the device would like to go by in this channel.
     name: String,
+    /// `keys::join_stamp`, made with the secret in the invite: proof for the owner's
+    /// phone that this device and name come from someone holding the invite. Kept and
+    /// handed to the owner; this server has no means of checking it.
+    stamp: String,
 }
 
 /// `POST /v1/channels/{channel}/join-requests`: ask to join, with a channel invite.
@@ -366,6 +370,9 @@ pub async fn ask(
 ) -> ApiResult<StatusCode> {
     if !valid_name(&body.name, 32) {
         return Err(ApiError::bad("name must be 1 to 32 characters"));
+    }
+    if body.stamp.is_empty() || body.stamp.len() > 64 {
+        return Err(ApiError::bad("a request to join carries the invite's stamp"));
     }
     let now = state.clock.now();
     let owner = state
@@ -384,9 +391,9 @@ pub async fn ask(
                 return Err(REFUSED);
             }
             tx.execute(
-                "INSERT INTO join_requests (channel, device, name) VALUES (?1, ?2, ?3)
-                 ON CONFLICT (channel, device) DO UPDATE SET name = ?3",
-                params![channel, auth.device, body.name],
+                "INSERT INTO join_requests (channel, device, name, stamp) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (channel, device) DO UPDATE SET name = ?3, stamp = ?4",
+                params![channel, auth.device, body.name, body.stamp],
             )?;
             tx.commit()?;
             Ok(owner)
@@ -396,7 +403,8 @@ pub async fn ask(
     Ok(StatusCode::ACCEPTED)
 }
 
-/// `GET /v1/channels/{channel}/join-requests`: for the owner, with each asker's keys.
+/// `GET /v1/channels/{channel}/join-requests`: for the owner, with each asker's stamp
+/// (which the owner's phone checks before it will let anyone in) and keys.
 pub async fn requests(
     State(state): State<AppState>,
     auth: Auth,
@@ -407,7 +415,7 @@ pub async fn requests(
         .run(move |db| {
             load_as_owner(db, &channel, &auth.device)?;
             let mut query = db.prepare(
-                "SELECT d.id, r.name, d.signing_key, d.agreement_key, d.agreement_sig
+                "SELECT d.id, r.name, d.signing_key, d.agreement_key, d.agreement_sig, r.stamp
                  FROM join_requests r JOIN devices d ON d.id = r.device
                  WHERE r.channel = ?1 ORDER BY d.id",
             )?;
@@ -416,6 +424,7 @@ pub async fn requests(
                     Ok(json!({
                         "device_id": row.get::<_, String>(0)?,
                         "name": row.get::<_, String>(1)?,
+                        "stamp": row.get::<_, String>(5)?,
                         "signing_key": b64(&row.get::<_, Vec<u8>>(2)?),
                         "agreement_key": b64(&row.get::<_, Vec<u8>>(3)?),
                         "agreement_sig": b64(&row.get::<_, Vec<u8>>(4)?),

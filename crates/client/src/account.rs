@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use deaddrop_core::encoding::{b64, random_id, unb64};
+use deaddrop_core::encoding::{b64, is_base32, random_id, random_token, unb64};
 use deaddrop_core::keys;
 use deaddrop_core::records::{
     ChannelRecord, Closed, Leave, Roster, RosterMember, Signed, SignedKey, open_closed, open_leave,
@@ -138,6 +138,21 @@ pub enum Event {
     ChannelsChanged,
 }
 
+/// An invite this device made to a channel it owns: the secret a request to join must
+/// be stamped with. Kept until it has let in as many devices as it was made for, or
+/// until it has run out with nobody still asking under it.
+#[derive(Clone, Serialize, Deserialize)]
+struct Invite {
+    channel: String,
+    secret: String,
+    /// When the server stops taking its token, Unix seconds.
+    expires: i64,
+    uses_left: u32,
+    /// Devices let in with it. A stamp is not taken twice from the same device, so a
+    /// request that was answered cannot be shown again later.
+    admitted: Vec<String>,
+}
+
 /// A channel this device has asked to join. The owner's ID comes from the invite, and
 /// is what the channel is checked against once the owner lets the device in.
 #[derive(Clone, Serialize, Deserialize)]
@@ -182,6 +197,8 @@ pub struct Account {
     messenger: Messenger,
     channels: BTreeMap<String, Channel>,
     asked: Vec<Asked>,
+    /// Invites made to channels this device owns, and not yet used up.
+    invites: Vec<Invite>,
     outbox: VecDeque<Outgoing>,
     /// Messages opened and not yet stored by the app, oldest first.
     inbox: VecDeque<Kept>,
@@ -204,6 +221,8 @@ struct Saved {
     // Absent from state saved by versions up to 0.1.1.
     #[serde(default)]
     inbox: Vec<Kept>,
+    #[serde(default)]
+    invites: Vec<Invite>,
 }
 
 /// The server's rule for names: some characters, no spaces at the ends, nothing unprintable.
@@ -268,6 +287,7 @@ impl Account {
             session: None,
             channels: BTreeMap::new(),
             asked: Vec::new(),
+            invites: Vec::new(),
             outbox: VecDeque::new(),
             inbox: VecDeque::new(),
             asked_keys: HashMap::new(),
@@ -521,6 +541,11 @@ impl Account {
     }
 
     /// A link that lets its holder ask to join this channel. Owner only.
+    ///
+    /// The link holds a secret made here and remembered here, which the server never
+    /// sees. Whoever asks with the link stamps their request with it, and that stamp is
+    /// what [`Account::join_requests`] goes by. Save the state afterwards: an invite
+    /// this device has forgotten lets nobody in.
     pub fn invite_to_channel(
         &mut self,
         keys: &dyn DeviceKeys,
@@ -535,7 +560,15 @@ impl Account {
             channel: channel.to_owned(),
             owner: self.device.clone(),
             token: text(&reply["token"], "invite")?,
+            secret: random_token(),
         };
+        self.invites.push(Invite {
+            channel: channel.to_owned(),
+            secret: invite.secret.clone(),
+            expires: now().saturating_add(i64::try_from(ttl_seconds).unwrap_or(i64::MAX)),
+            uses_left: uses,
+            admitted: Vec::new(),
+        });
         Ok(Link { server: self.address.clone(), server_token: None, channel: Some(invite) })
     }
 
@@ -556,13 +589,18 @@ impl Account {
     ///
     /// Before asking, the channel the server shows is checked against the invite: it
     /// must be signed by the owner the invite names.
+    ///
+    /// The request carries a stamp made with the invite's secret, over this device's ID
+    /// and `my_name`. The owner's phone lets in only a device whose stamp checks out,
+    /// so the server cannot pass another device, or another name, off as this one.
     pub fn ask_to_join(&mut self, keys: &dyn DeviceKeys, link: &Link, my_name: &str) -> Result<(), ClientError> {
         let invite = link.channel.as_ref().ok_or(ClientError::BadLink)?;
         if link.server.fingerprint != self.address.fingerprint {
             return Err(ClientError::WrongServer);
         }
         self.verified_record(keys, &invite.channel, &invite.owner)?;
-        let body = json!({ "token": invite.token, "name": my_name });
+        let stamp = keys::join_stamp(&invite.secret, &invite.channel, &self.device, my_name);
+        let body = json!({ "token": invite.token, "name": my_name, "stamp": stamp });
         self.request(keys, Method::POST, &format!("/v1/channels/{}/join-requests", invite.channel), Some(body))?;
         self.asked.retain(|asked| asked.channel != invite.channel);
         self.asked.push(Asked { channel: invite.channel.clone(), owner: invite.owner.clone() });
@@ -570,32 +608,80 @@ impl Account {
     }
 
     /// Who is asking to join a channel this device owns.
+    ///
+    /// Only requests stamped with an invite this device made are returned: the device
+    /// and the name in each are the ones the invite's holder stamped, not merely what
+    /// the server says. Anything else the server lists is declined.
     pub fn join_requests(&mut self, keys: &dyn DeviceKeys, channel: &str) -> Result<Vec<JoinRequest>, ClientError> {
+        Ok(self.stamped_requests(keys, channel)?.into_iter().map(|(request, _)| request).collect())
+    }
+
+    /// The requests to join `channel` whose stamps check out, each with the secret of
+    /// the invite it was stamped with.
+    fn stamped_requests(
+        &mut self,
+        keys: &dyn DeviceKeys,
+        channel: &str,
+    ) -> Result<Vec<(JoinRequest, String)>, ClientError> {
         self.owned(channel)?;
         let reply = self.request(keys, Method::GET, &format!("/v1/channels/{channel}/join-requests"), None)?;
-        let mut requests = Vec::new();
+        let (mut stamped, mut unstamped) = (Vec::new(), Vec::new());
         for entry in reply["requests"].as_array().map(Vec::as_slice).unwrap_or_default() {
-            requests.push(JoinRequest {
-                device: text(&entry["device_id"], "join request")?,
-                name: text(&entry["name"], "join request")?,
+            let device = text(&entry["device_id"], "join request")?;
+            let name = entry["name"].as_str().unwrap_or_default();
+            let stamp = entry["stamp"].as_str().unwrap_or_default();
+            let invite = self.invites.iter().find(|invite| {
+                invite.channel == channel
+                    && !invite.admitted.contains(&device)
+                    && keys::join_stamp_matches(&invite.secret, channel, &device, name, stamp)
             });
+            match invite {
+                Some(invite) => stamped.push((JoinRequest { device, name: name.to_owned() }, invite.secret.clone())),
+                None => unstamped.push(device),
+            }
         }
-        Ok(requests)
+        // A request with no good stamp can never be let in: not one of this device's
+        // invites, or one already used up, or something the server made up. It is
+        // declined, so that an honest server does not keep it and its sender waiting.
+        for device in unstamped.iter().filter(|device| is_base32(device, keys::DEVICE_ID_LEN)) {
+            match self.request(keys, Method::DELETE, &format!("/v1/channels/{channel}/join-requests/{device}"), None) {
+                Ok(_) | Err(ClientError::Refused { .. }) => {}
+                Err(other) => return Err(other),
+            }
+        }
+        // An invite that has run out is kept only while someone is still asking under it.
+        let time = now();
+        self.invites.retain(|invite| {
+            invite.channel != channel
+                || invite.expires > time
+                || stamped.iter().any(|(_, secret)| *secret == invite.secret)
+        });
+        Ok(stamped)
     }
 
     /// Lets a device that has asked into the channel, by signing a new roster with it in.
+    ///
+    /// Only a device whose request is stamped with one of this device's invites can be
+    /// let in, and under the name it stamped.
     pub fn admit(&mut self, keys: &dyn DeviceKeys, channel: &str, device: &str) -> Result<(), ClientError> {
-        let requests = self.join_requests(keys, channel)?;
-        let request = requests.into_iter().find(|request| request.device == device);
-        let request = request.ok_or(ClientError::Refused { status: 404, message: "no such request".into() })?;
+        let requests = self.stamped_requests(keys, channel)?;
+        let found = requests.into_iter().find(|(request, _)| request.device == device);
+        let (request, secret) = found.ok_or(ClientError::Refused { status: 404, message: "no such request".into() })?;
         let current = self.owned(channel)?;
         // They are a member from the roster this makes. If they were in the channel
         // before and are still listed, this entry takes the old one's place.
         let since = current.roster_version + 1;
         let mut members = current.members.clone();
         members.retain(|member| member.device != request.device);
-        members.push(RosterMember { device: request.device, name: request.name, since });
-        self.publish_roster(keys, channel, members)
+        members.push(RosterMember { device: request.device.clone(), name: request.name, since });
+        self.publish_roster(keys, channel, members)?;
+        // That use of the invite is spent.
+        for invite in self.invites.iter_mut().filter(|invite| invite.secret == secret) {
+            invite.uses_left = invite.uses_left.saturating_sub(1);
+            invite.admitted.push(request.device.clone());
+        }
+        self.invites.retain(|invite| invite.uses_left > 0);
+        Ok(())
     }
 
     /// Removes a member, by signing a new roster without them.
@@ -780,6 +866,7 @@ impl Account {
 
     fn forget(&mut self, channel: &str) {
         self.channels.remove(channel);
+        self.invites.retain(|invite| invite.channel != channel);
         self.messenger.forget_channel(channel);
         self.outbox.retain(|queued| queued.channel != channel);
         self.inbox.retain(|kept| match &kept.event {
@@ -1252,6 +1339,7 @@ impl Account {
             messenger: b64(&self.messenger.to_bytes()),
             channels: self.channels.values().cloned().collect(),
             asked: self.asked.clone(),
+            invites: self.invites.clone(),
             outbox: self.outbox.iter().cloned().collect(),
             inbox: self.inbox.iter().cloned().collect(),
         };
@@ -1276,6 +1364,7 @@ impl Account {
             messenger: Messenger::from_bytes(&messenger).map_err(|_| ClientError::BadState)?,
             channels: saved.channels.into_iter().map(|channel| (channel.id.clone(), channel)).collect(),
             asked: saved.asked,
+            invites: saved.invites,
             outbox: saved.outbox.into_iter().collect(),
             inbox: saved.inbox.into_iter().collect(),
             asked_keys: HashMap::new(),

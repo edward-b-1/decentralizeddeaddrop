@@ -95,3 +95,31 @@ async fn removing_the_last_recipient_wipes_the_bytes_too() {
     assert_eq!(server.put_roster(&owner, &channel, &alone).await.0, StatusCode::NO_CONTENT);
     assert!(!on_disk(&scratch.0, &body));
 }
+
+#[tokio::test]
+async fn a_database_from_before_join_requests_were_stamped_is_brought_up_to_date() {
+    let scratch = Scratch::new();
+    let path = scratch.0.join("old.db");
+    {
+        let old = rusqlite::Connection::open(&path).unwrap();
+        old.execute_batch(
+            "CREATE TABLE join_requests (
+                 channel TEXT NOT NULL, device TEXT NOT NULL, name TEXT NOT NULL,
+                 PRIMARY KEY (channel, device)
+             ) WITHOUT ROWID;
+             INSERT INTO join_requests VALUES ('a channel', 'a device', 'Old');",
+        )
+        .unwrap();
+    }
+    for _ in 0..2 {
+        // Opened twice: the change is made once and is harmless to repeat.
+        let store = Store::open(&path).unwrap();
+        let kept: (String, String) = store
+            .run(|db| {
+                Ok(db.query_row("SELECT name, stamp FROM join_requests", [], |row| Ok((row.get(0)?, row.get(1)?)))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, ("Old".to_owned(), String::new()), "kept, with no stamp, for the owner's phone to decline");
+    }
+}

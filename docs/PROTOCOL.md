@@ -60,17 +60,19 @@ instead (`--tls-cert`, `--tls-key`); the fingerprint works the same way.
 Links (also the QR content) are handled by the app itself, never by a website:
 
 ```
-deaddrop://HOST:PORT/#fp=<fingerprint>[&t=<server token>][&c=<channel>&o=<owner>&ct=<channel token>]
+deaddrop://HOST:PORT/#fp=<fingerprint>[&t=<server token>][&c=<channel>&o=<owner>&ct=<channel token>&cs=<secret>]
 ```
 
 - `fp`: the server's fingerprint.
 - `t`: a token that lets a new device onto the server (made by the operator).
-- `c`, `o`, `ct`: an invite to a channel (made by its owner): the channel's ID, the
-  owner's device ID, and a token that lets the holder ask to join. The owner's ID is
-  what lets the joiner check that the channel the server shows is the one they were
-  invited to (§3.1).
+- `c`, `o`, `ct`, `cs`: an invite to a channel (made by its owner): the channel's ID,
+  the owner's device ID, a token that lets the holder ask to join, and a secret. The
+  owner's ID is what lets the joiner check that the channel the server shows is the one
+  they were invited to (§3.1). The secret is what lets the owner's phone check that a
+  request to join comes from someone holding this invite (§5).
 
-Nothing after the `#` is ever sent in a request.
+The link itself is never sent in a request. The two tokens are what a phone shows the
+server. The secret is never shown to it.
 
 ## 3. Ways in (server authentication)
 
@@ -141,8 +143,17 @@ members; there is no separate one-to-one mechanism.
 As in Pocket Radio:
 - The creator is the **owner**. The owner's device signs the **channel record** (name,
   maximum message age §7, a version that only goes up).
-- Joining needs an invite (link, code or QR) from the owner. The joiner then *asks* to join,
+- Joining needs an invite (link or QR) from the owner. The joiner then *asks* to join,
   and the owner lets them in. Nobody is put in a channel without asking.
+- **The server cannot choose who is let in.** An invite holds a secret that the owner's
+  phone makes and remembers and that never goes to the server. The joiner's phone puts a
+  *stamp* on its request: HMAC-SHA256, keyed with that secret, over the channel, its own
+  device ID and the name it asks for. The owner's phone shows, and will sign into the
+  roster, only a request whose stamp checks out against an invite it made, and declines
+  the rest. So the server cannot put another device or another name in a joiner's
+  place, nor make a request up. An invite stops counting once it has let in as many
+  devices as it was made for, so a request that was answered cannot be played again.
+  Whoever holds an invite can use it, so an invite is as private as the way it was sent.
 - Only the owner adds or removes members.
 - Lost owner phone = the channel can no longer change. Members can leave.
 

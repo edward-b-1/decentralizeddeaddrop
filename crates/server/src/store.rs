@@ -117,10 +117,13 @@ CREATE TABLE IF NOT EXISTS removals (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS removals_by_device ON removals(device);
 
+-- stamp: what the asker's phone made with the secret in its invite (keys::join_stamp),
+-- for the owner's phone to check. This server never has the secret and cannot check it.
 CREATE TABLE IF NOT EXISTS join_requests (
     channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
     device  TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
     name    TEXT NOT NULL,
+    stamp   TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (channel, device)
 ) WITHOUT ROWID;
 
@@ -168,6 +171,16 @@ impl Store {
         // Overwrite deleted rows with zeros instead of only unlinking them.
         conn.query_row("PRAGMA secure_delete = ON", [], |_| Ok(()))?;
         conn.execute_batch(SCHEMA)?;
+        // A database from before join requests carried a stamp. Requests already in it
+        // have none, and the owner's phone will decline them.
+        let stamped: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM pragma_table_info('join_requests') WHERE name = 'stamp')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !stamped {
+            conn.execute_batch("ALTER TABLE join_requests ADD COLUMN stamp TEXT NOT NULL DEFAULT ''")?;
+        }
         Ok(Store { conn: Arc::new(Mutex::new(conn)) })
     }
 

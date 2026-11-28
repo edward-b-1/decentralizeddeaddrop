@@ -140,13 +140,19 @@ caller appears to come from the proxy, and the limit becomes one shared limit.
 | PUT | `/v1/channels/{channel}` | owner | New signed record (higher version) |
 | DELETE | `/v1/channels/{channel}` | owner | Delete the channel and its queue. `closed`: the owner's signed closed record (optional, for versions up to 0.1.1) |
 | POST | `/v1/channels/{channel}/invites` | owner | `uses`, `ttl` → `token` |
-| POST | `/v1/channels/{channel}/join-requests` | device | Ask to join: `token`, `name` |
-| GET | `/v1/channels/{channel}/join-requests` | owner | Who is asking, with their keys |
+| POST | `/v1/channels/{channel}/join-requests` | device | Ask to join: `token`, `name`, `stamp` |
+| GET | `/v1/channels/{channel}/join-requests` | owner | Who is asking, with their stamps and keys |
 | DELETE | `/v1/channels/{channel}/join-requests/{device}` | owner | Decline |
 | PUT | `/v1/channels/{channel}/roster` | owner | New signed roster (higher version): the only way to add or remove members |
 | GET | `/v1/channels/{channel}/members` | member | Signed roster, who has left since (`left`), what the leavers signed (`leaves`), every member's keys |
 | DELETE | `/v1/channels/{channel}/members/me` | member | Leave. `leave`: the member's signed leave (optional, for versions up to 0.1.1) |
 | DELETE | `/v1/channels/{channel}/removal` | device | I have seen the proof that I am out of this channel; stop keeping it |
+
+A `stamp` is made by the asker's phone with a secret from the invite that this server
+never sees (HMAC-SHA256 over `deaddrop/join/v1\n<channel>\n<device>\n<name>`, base64).
+The server keeps it and hands it to the owner, whose phone lets in only a request whose
+stamp it can check. The server cannot check one, make one, or move one to another device
+or name.
 
 A new roster may list anyone in the roster it replaces and anyone who has asked to join,
 and nobody else. Delivery starts only for those who asked: a member who has left stays
