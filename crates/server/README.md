@@ -105,7 +105,7 @@ covers `<context>\n<record>` where the context is `deaddrop/channel/v1` or
 | POST | `/v1/sessions/challenge` | anyone | `device_id` → `challenge` |
 | POST | `/v1/sessions` | anyone | `device_id`, `challenge`, `signature` over `deaddrop/session/v1\n<server_id>\n<challenge>` → session `token` (one hour) |
 | GET | `/v1/devices/me` | device | Who am I |
-| DELETE | `/v1/devices/me` | device | Delete this device, its memberships and the channels it owns. Optional `leaves`: a signed leave for each channel it is in, kept for those channels' owners |
+| DELETE | `/v1/devices/me` | device | Delete this device, its memberships and the channels it owns. Optional `leaves`: a signed leave for each channel it is in, kept for those channels' owners. Optional `closed`: a signed closed record for each channel it owns, kept for those channels' members |
 
 A device ID is base32 of the first ten bytes of SHA-256 of the signing key. `agreement_sig`
 is the signing key's signature over `deaddrop/agreement-key/v1\n<base64 agreement key>`.
@@ -134,11 +134,11 @@ caller appears to come from the proxy, and the limit becomes one shared limit.
 
 | Method | Path | Who | Purpose |
 |---|---|---|---|
-| GET | `/v1/channels` | device | My channels and my open join requests |
+| GET | `/v1/channels` | device | My channels, my open join requests, and proof for each channel I am no longer in (`removed`) |
 | POST | `/v1/channels` | device | Create: signed `channel` record and a signed `roster` naming only the owner |
 | GET | `/v1/channels/{channel}` | device | Signed record, owner's key, roster version |
 | PUT | `/v1/channels/{channel}` | owner | New signed record (higher version) |
-| DELETE | `/v1/channels/{channel}` | owner | Delete the channel and its queue |
+| DELETE | `/v1/channels/{channel}` | owner | Delete the channel and its queue. `closed`: the owner's signed closed record (optional, for versions up to 0.1.1) |
 | POST | `/v1/channels/{channel}/invites` | owner | `uses`, `ttl` → `token` |
 | POST | `/v1/channels/{channel}/join-requests` | device | Ask to join: `token`, `name` |
 | GET | `/v1/channels/{channel}/join-requests` | owner | Who is asking, with their keys |
@@ -146,6 +146,7 @@ caller appears to come from the proxy, and the limit becomes one shared limit.
 | PUT | `/v1/channels/{channel}/roster` | owner | New signed roster (higher version): the only way to add or remove members |
 | GET | `/v1/channels/{channel}/members` | member | Signed roster, who has left since (`left`), what the leavers signed (`leaves`), every member's keys |
 | DELETE | `/v1/channels/{channel}/members/me` | member | Leave. `leave`: the member's signed leave (optional, for versions up to 0.1.1) |
+| DELETE | `/v1/channels/{channel}/removal` | device | I have seen the proof that I am out of this channel; stop keeping it |
 
 A new roster may list anyone in the roster it replaces and anyone who has asked to join,
 and nobody else. Delivery starts only for those who asked: a member who has left stays
@@ -157,6 +158,16 @@ is what a channel owner's phone checks before it signs a roster without that mem
 server checks a leave before keeping it, keeps it with the signing key (the device may
 be deleted by the time anyone reads it), and deletes it when the owner's roster no
 longer lists the member or lets them back in.
+
+**Proof of removal.** A phone gives up a channel's keys only on the owner's signature,
+so the server keeps one for each phone that needs it and lists them as `removed` in
+`GET /v1/channels`: `{"id", "owner_key", "roster"}` with the owner's roster that dropped
+the device, or `{"id", "owner_key", "closed"}` with the owner's closed record
+(`deaddrop/closed/v1`: the channel) when the channel is deleted. A member who left gets
+none; their phone gave the channel up itself. A proof is deleted when the device says it
+has seen it, when the device is let back in or deleted, or after 30 days. Deleting a
+channel replaces the rosters kept this way for it with the closed record, or simply
+deletes them if the owner sent none.
 
 ### Messaging keys and prekeys
 

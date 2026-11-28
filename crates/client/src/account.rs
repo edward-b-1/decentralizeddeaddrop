@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use deaddrop_core::encoding::{b64, random_id, unb64};
 use deaddrop_core::keys;
 use deaddrop_core::records::{
-    ChannelRecord, Leave, Roster, RosterMember, Signed, SignedKey, open_leave, open_messaging_keys,
+    ChannelRecord, Closed, Leave, Roster, RosterMember, Signed, SignedKey, open_closed, open_leave,
+    open_messaging_keys, open_removal,
 };
 use deaddrop_crypto::{Error as CryptoError, Incoming, Messenger};
 use reqwest::Method;
@@ -74,6 +75,13 @@ pub struct Channel {
     /// phone, or its operator removed them, or the server is hiding them).
     #[serde(default)]
     pub missing: Vec<String>,
+    /// The server no longer shows this device the channel, and has shown nothing signed
+    /// by the owner to say why (a roster without this device, or the owner's word that
+    /// the channel is deleted). That is only the server's word, so the channel and its
+    /// keys are kept, for the person holding the phone to remove or not. Nothing can be
+    /// sent or received meanwhile. If the server shows the channel again, it carries on.
+    #[serde(default)]
+    pub unlisted: bool,
 }
 
 impl Channel {
@@ -501,6 +509,7 @@ impl Account {
                 left: Vec::new(),
                 confirmed: Vec::new(),
                 missing: Vec::new(),
+                unlisted: false,
             },
         );
         Ok(id)
@@ -707,8 +716,15 @@ impl Account {
     ///
     /// The server is given this device's signed word that it is leaving, which is what
     /// lets the owner's phone take it off the member list without the owner being asked.
+    ///
+    /// A channel the server no longer shows this device ([`Channel::unlisted`]) is simply
+    /// forgotten: there is nobody to tell.
     pub fn leave(&mut self, keys: &dyn DeviceKeys, channel: &str) -> Result<(), ClientError> {
         let held = self.channels.get(channel).ok_or(ClientError::UnknownChannel)?;
+        if held.unlisted {
+            self.forget(channel);
+            return Ok(());
+        }
         let body = json!({ "leave": self.signed_leave(keys, held) });
         self.request(keys, Method::DELETE, &format!("/v1/channels/{channel}/members/me"), Some(body))?;
         self.forget(channel);
@@ -727,22 +743,38 @@ impl Account {
     }
 
     /// Deletes a channel for everyone. Owner only.
+    ///
+    /// The server is given the owner's signed word that the channel is deleted, which
+    /// is what lets each member's phone give up the channel's keys.
     pub fn delete_channel(&mut self, keys: &dyn DeviceKeys, channel: &str) -> Result<(), ClientError> {
-        self.owned(channel)?;
-        self.request(keys, Method::DELETE, &format!("/v1/channels/{channel}"), None)?;
+        if self.owned(channel)?.unlisted {
+            self.forget(channel);
+            return Ok(());
+        }
+        let body = json!({ "closed": self.signed_closed(keys, channel) });
+        self.request(keys, Method::DELETE, &format!("/v1/channels/{channel}"), Some(body))?;
         self.forget(channel);
         Ok(())
+    }
+
+    fn signed_closed(&self, keys: &dyn DeviceKeys, channel: &str) -> Signed {
+        let closed = Closed { v: 1, channel: channel.to_owned(), issued: now() };
+        Signed::seal(&closed, |message| keys.sign(message))
     }
 
     /// Takes this device off the server: its memberships, anything waiting for it, and
     /// every channel it owns are deleted there. The account is of no use afterwards.
     ///
     /// For each channel it is in and does not own, it leaves its signed word that it
-    /// has left, so that those channels' owners need not take the server's.
+    /// has left, so that those channels' owners need not take the server's. For each
+    /// channel it owns, it leaves its signed word that the channel is deleted, for the
+    /// members' phones.
     pub fn leave_server(&mut self, keys: &dyn DeviceKeys) -> Result<(), ClientError> {
-        let others = self.channels.values().filter(|channel| channel.owner != self.device);
-        let leaves: Vec<Signed> = others.map(|channel| self.signed_leave(keys, channel)).collect();
-        self.request(keys, Method::DELETE, "/v1/devices/me", Some(json!({ "leaves": leaves })))?;
+        let (mine, others): (Vec<&Channel>, Vec<&Channel>) =
+            self.channels.values().partition(|channel| channel.owner == self.device);
+        let leaves: Vec<Signed> = others.into_iter().map(|channel| self.signed_leave(keys, channel)).collect();
+        let closed: Vec<Signed> = mine.into_iter().map(|channel| self.signed_closed(keys, &channel.id)).collect();
+        self.request(keys, Method::DELETE, "/v1/devices/me", Some(json!({ "leaves": leaves, "closed": closed })))?;
         Ok(())
     }
 
@@ -872,6 +904,7 @@ impl Account {
             left,
             confirmed,
             missing,
+            unlisted: false,
         };
         let changed = before.as_ref() != Some(&after);
         self.channels.insert(channel.to_owned(), after);
@@ -907,15 +940,46 @@ impl Account {
                 changed = true;
             }
         }
+        // Channels held here that the server no longer shows this device. Its saying so
+        // is not enough to give up a channel's keys: that takes the owner's signature,
+        // on a roster without this device or on the channel's deletion.
+        let proofs = list["removed"].as_array().cloned().unwrap_or_default();
         let gone: Vec<String> = self.channels.keys().filter(|id| !mine.contains(id)).cloned().collect();
         for channel in gone {
-            // Removed by the owner, or the channel was deleted.
-            self.forget(&channel);
-            changed = true;
+            let proved = self.channels.get(&channel).is_some_and(|held| {
+                proofs.iter().any(|proof| proof["id"] == channel.as_str() && self.removal_proved(held, proof))
+            });
+            if proved {
+                self.forget(&channel);
+                changed = true;
+            } else if let Some(held) = self.channels.get_mut(&channel).filter(|held| !held.unlisted) {
+                held.unlisted = true;
+                changed = true;
+            }
+        }
+        // Proofs that have done their job (or are for channels not held here) need be
+        // kept by the server no longer. One that failed its check is left where it is.
+        for proof in &proofs {
+            if let Some(id) = proof["id"].as_str().filter(|id| !self.channels.contains_key(*id)) {
+                self.request(keys, Method::DELETE, &format!("/v1/channels/{id}/removal"), None)?;
+            }
         }
         let asking_before = self.asked.len();
         self.asked.retain(|asked| still_asking.contains(&asked.channel));
         Ok(changed || self.asked.len() != asking_before)
+    }
+
+    /// Whether what the server offers proves, by the owner's signature, that this
+    /// device is out of a channel it holds: the channel is deleted, or a roster newer
+    /// than the one held does not list this device.
+    fn removal_proved(&self, held: &Channel, proof: &Value) -> bool {
+        let Some(key) = proof["owner_key"].as_str().and_then(unb64) else { return false };
+        if let Ok(closed) = serde_json::from_value::<Signed>(proof["closed"].clone()) {
+            return open_closed(&held.id, &held.owner, &key, &closed).is_ok();
+        }
+        serde_json::from_value::<Signed>(proof["roster"].clone()).is_ok_and(|roster| {
+            open_removal(&held.id, &held.owner, &self.device, held.roster_version, &key, &roster).is_ok()
+        })
     }
 
     // ------------------------------------------------------------------ sending
@@ -950,8 +1014,9 @@ impl Account {
 
     /// Seals something for everyone in a channel and posts it.
     fn post(&mut self, keys: &dyn DeviceKeys, channel: &str, payload: Value, save: Save) -> Result<bool, ClientError> {
-        if !self.channels.contains_key(channel) {
-            return Err(ClientError::UnknownChannel);
+        let held = self.channels.get(channel).ok_or(ClientError::UnknownChannel)?;
+        if held.unlisted {
+            return Err(ClientError::Invalid("the server no longer has this device in that channel"));
         }
         self.connect_members(keys, channel)?;
         let sealed = self.messenger.encrypt(channel, payload.to_string().as_bytes(), now())?;

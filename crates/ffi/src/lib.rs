@@ -170,6 +170,10 @@ pub struct ChannelInfo {
     /// Maximum message age, in seconds.
     pub max_age: u64,
     pub members: Vec<Member>,
+    /// The server no longer shows this device the channel and has shown nothing signed
+    /// by its owner to say why. It is kept, with its keys, until the person holding the
+    /// phone removes it ([`Session::leave`]); nothing can be sent or received.
+    pub unlisted: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -304,6 +308,7 @@ impl Session {
                 owner: channel.owner.clone(),
                 owned_by_me: channel.owner == account.device(),
                 max_age: channel.max_age,
+                unlisted: channel.unlisted,
                 members: channel
                     .members
                     .iter()
@@ -377,6 +382,7 @@ impl Session {
         self.change(|account, keys| account.set_max_age(keys, &channel, max_age))
     }
 
+    /// Leaves a channel. One the server no longer shows this device is just forgotten.
     pub fn leave(&self, channel: String) -> Outcome<()> {
         self.change(|account, keys| account.leave(keys, &channel))
     }

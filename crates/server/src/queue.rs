@@ -277,7 +277,8 @@ async fn serve(state: AppState, mut socket: WebSocket) -> Result<(), ()> {
 }
 
 /// Wipes what has passed its channel's maximum message age, and tidies expired
-/// sign-in leftovers. Returns how many messages were wiped.
+/// sign-in leftovers and proofs of removal nobody collected. Returns how many messages
+/// were wiped.
 pub fn sweep(db: &mut Connection, now: i64) -> rusqlite::Result<usize> {
     let tx = db.transaction()?;
     // Pending marks go with their message (ON DELETE CASCADE).
@@ -285,6 +286,7 @@ pub fn sweep(db: &mut Connection, now: i64) -> rusqlite::Result<usize> {
     tx.execute("DELETE FROM sessions WHERE expires <= ?1", [now])?;
     tx.execute("DELETE FROM challenges WHERE expires <= ?1", [now])?;
     tx.execute("DELETE FROM tokens WHERE expires <= ?1", [now])?;
+    tx.execute("DELETE FROM removals WHERE expires <= ?1", [now])?;
     tx.commit()?;
     store::checkpoint(db)?;
     Ok(wiped)

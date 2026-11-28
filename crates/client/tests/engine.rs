@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use deaddrop_client::{Account, ClientError, Event, Link, ServerAddress, Wake, WayIn, WaysIn};
 use deaddrop_core::encoding::random_id;
-use deaddrop_core::records::Leave;
+use deaddrop_core::records::{Closed, Leave};
 use deaddrop_core::soft::SoftDevice;
 use deaddropd::{AppState, Store, tls};
 
@@ -707,4 +707,112 @@ fn a_leave_is_believed_only_from_the_member_themselves_and_only_once() {
     assert!(still_in(&anna) && still_in(&ben), "signed before she was let back in, so it no longer counts");
     assert_eq!(anna.send(&id, "welcome back"), Ok(true));
     assert_eq!(Person::texts(&cara.sync()), ["Anna: welcome back"]);
+}
+
+#[test]
+fn someone_taken_out_or_whose_channel_is_deleted_is_shown_the_owners_signature() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let id = channel(&mut anna, "Anna", &mut [(&mut ben, "Ben"), (&mut cara, "Cara")]);
+
+    // Anna takes Ben out. The server keeps her signed list for him; his phone checks it,
+    // gives the channel up, and says it has seen it.
+    let bens_device = ben.account.device().to_owned();
+    anna.account.remove(&anna.keys, &id, &bens_device).unwrap();
+    assert_eq!(server.rows("removals"), 1);
+    assert!(ben.sync().contains(&Event::ChannelsChanged));
+    assert!(ben.account.channel(&id).is_none());
+    assert_eq!(server.rows("removals"), 0);
+
+    // Anna deletes the channel. All that is left of it is her signed word, for Cara's
+    // phone (and for her own, had it not heard that the deletion went through).
+    cara.sync();
+    anna.account.delete_channel(&anna.keys, &id).unwrap();
+    assert_eq!((server.rows("channels"), server.rows("removals")), (0, 2));
+    assert!(cara.sync().contains(&Event::ChannelsChanged));
+    assert!(cara.account.channel(&id).is_none());
+    anna.sync();
+    assert_eq!(server.rows("removals"), 0);
+}
+
+#[test]
+fn a_server_that_only_says_a_phone_is_out_of_a_channel_does_not_cost_it_its_keys() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    // Anna's first member list, from before Ben was let in, is put by to be played later.
+    let id = anna.account.create_channel(&anna.keys, "Family", "Anna", 3600).unwrap();
+    server.tamper("CREATE TABLE early AS SELECT id, roster, roster_sig FROM channels".into());
+    admit(&mut anna, &id, &mut ben, "Ben");
+    admit(&mut anna, &id, &mut cara, "Cara");
+    for person in [&mut anna, &mut ben, &mut cara] {
+        person.sync();
+    }
+    assert_eq!(anna.send(&id, "hello"), Ok(true));
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: hello"]);
+    let ben_id = ben.account.device().to_owned();
+    let hex = |bytes: Vec<u8>| bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let (annas_key, caras_key) = (hex(anna.keys.signing_key_der()), hex(cara.keys.signing_key_der()));
+
+    // The server lies: Ben is not in the channel, it says, with nothing from Anna to show.
+    server.tamper(format!("DELETE FROM members WHERE device = '{ben_id}'"));
+    assert!(ben.sync().contains(&Event::ChannelsChanged));
+    let held = ben.account.channel(&id).unwrap();
+    assert!(held.unlisted, "kept, and marked as not on the server");
+    assert_eq!(held.members.len(), 3);
+    assert!(matches!(ben.send(&id, "hello?"), Err(ClientError::Invalid(_))));
+    assert!(!ben.sync().contains(&Event::ChannelsChanged), "nothing new to tell the app");
+
+    // It tries harder: Anna's own list from before Ben was let in; then a deletion Cara
+    // signed, passed off under Cara's key and under Anna's.
+    server.tamper(format!(
+        "INSERT INTO removals SELECT id, '{ben_id}', X'{annas_key}', 0, roster, roster_sig, 99999999999 FROM early"
+    ));
+    ben.sync();
+    assert!(ben.account.channel(&id).is_some(), "a list older than the one Ben is in proves nothing");
+    let forged = cara.keys.seal(&Closed { v: 1, channel: id.clone(), issued: 0 });
+    for key in [&caras_key, &annas_key] {
+        server.tamper(format!(
+            "INSERT OR REPLACE INTO removals VALUES ('{id}', '{ben_id}', X'{key}', 1, '{}', '{}', 99999999999)",
+            forged.record, forged.signature
+        ));
+        ben.sync();
+        assert!(ben.account.channel(&id).is_some(), "not the owner's signature");
+    }
+    assert_eq!(server.rows("removals"), 1, "what failed its check is not said to have been seen");
+
+    // The server stops lying. Ben has his keys still, and is where he was.
+    server.tamper(format!("DELETE FROM removals; INSERT INTO members (channel, device) VALUES ('{id}', '{ben_id}')"));
+    assert!(ben.sync().contains(&Event::ChannelsChanged));
+    assert!(!ben.account.channel(&id).unwrap().unlisted);
+    assert_eq!(anna.send(&id, "still with us"), Ok(true));
+    assert_eq!(Person::texts(&ben.sync()), ["Anna: still with us"]);
+    assert_eq!(ben.send(&id, "I am"), Ok(true));
+    assert_eq!(Person::texts(&anna.sync()), ["Ben: I am"]);
+}
+
+#[test]
+fn a_channel_the_server_no_longer_shows_is_the_persons_to_take_off_their_phone() {
+    let server = TestServer::start();
+    let mut anna = Person::operator(&server);
+    let mut ben = Person::invited_by(&mut anna);
+    let mut cara = Person::invited_by(&mut anna);
+    let id = channel(&mut ben, "Ben", &mut [(&mut cara, "Cara")]);
+
+    // The operator removes Ben's device, and his channel goes with it. He signed
+    // nothing, so Cara's phone has only the server's word that the channel is gone.
+    anna.account.remove_device(&anna.keys, ben.account.device()).unwrap();
+    assert_eq!(server.rows("channels"), 0);
+    cara.sync();
+    assert!(cara.account.channel(&id).unwrap().unlisted);
+    cara.restart();
+    assert!(cara.account.channel(&id).unwrap().unlisted, "remembered across a restart");
+
+    // Taking it off her phone is her decision, and needs nothing from the server.
+    cara.account.leave(&cara.keys, &id).unwrap();
+    assert!(cara.account.channel(&id).is_none());
+    assert!(!cara.sync().contains(&Event::ChannelsChanged));
 }

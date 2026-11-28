@@ -53,6 +53,12 @@ data class ChannelUi(
     val asking: Int,
     /** This phone's name in the channel. */
     val myName: String,
+    /**
+     * The server no longer shows this phone the channel, and has shown nothing signed by
+     * its owner to say why. It stays on the phone, with its history, until the person
+     * holding it removes it. Nothing can be sent or received.
+     */
+    val unlisted: Boolean,
 ) {
     val key: String get() = "$slot/$id"
 }
@@ -214,7 +220,8 @@ object Servers {
                         },
                         lastTime = last?.sent ?: 0,
                         unread = history?.unread ?: 0,
-                        asking = if (channel.ownedByMe) entry.asking[channel.id] ?: 0 else 0,
+                        asking = if (channel.ownedByMe && !channel.unlisted) entry.asking[channel.id] ?: 0 else 0,
+                        unlisted = channel.unlisted,
                     )
                 },
                 asked = session.asked(),
@@ -337,7 +344,7 @@ object Servers {
      */
     private fun lookAround(entry: Entry) {
         val session = entry.session
-        val owned = session.channels().filter { it.ownedByMe }.map { it.id }
+        val owned = session.channels().filter { it.ownedByMe && !it.unlisted }.map { it.id }
         entry.asking.keys.retainAll(owned.toSet())
         for (channel in owned) {
             runCatching { session.joinRequests(channel).size }.onSuccess { entry.asking[channel] = it }
@@ -504,6 +511,7 @@ object Servers {
         publish()
     }
 
+    /** Leaves a channel. One the server no longer shows this phone is simply taken off it. */
     suspend fun leave(slot: Int, channel: String) = on(slot) {
         it.leave(channel)
         forgetHistory(slot, channel)

@@ -227,6 +227,9 @@ private fun ChannelsTab(servers: List<ServerUi>, go: (Screen) -> Unit) {
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            if (channel.unlisted) {
+                                Text("No longer on the server", fontSize = 13.sp, fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.error)
+                            }
                             if (channel.asking > 0) {
                                 Text(
                                     if (channel.asking == 1) "Someone is asking to join" else "${channel.asking} people are asking to join",

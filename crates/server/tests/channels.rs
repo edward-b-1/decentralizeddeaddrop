@@ -6,7 +6,9 @@ use axum::http::StatusCode;
 use common::*;
 use deaddrop_core::encoding::{random_id, unb64};
 use deaddrop_core::keys;
-use deaddrop_core::records::{ChannelRecord, Leave, Roster, RosterMember, Signed, open_leave};
+use deaddrop_core::records::{
+    ChannelRecord, Closed, Leave, Roster, RosterMember, Signed, open_closed, open_leave, open_removal,
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -89,7 +91,7 @@ async fn joining_needs_an_invite_and_the_owners_signature() {
 
     server.ask_to_join(&owner, &channel, &joiner, "Joiner").await;
     let (_, mine) = server.as_phone(&joiner, GET, "/v1/channels", None).await;
-    assert_eq!(mine, json!({ "channels": [], "requests": [channel] }), "asking is not joining");
+    assert_eq!(mine, json!({ "channels": [], "requests": [channel], "removed": [] }), "asking is not joining");
     let (status, _) = server.as_phone(&joiner, GET, &format!("/v1/channels/{channel}/members"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
@@ -295,4 +297,145 @@ async fn only_the_owner_changes_or_deletes_a_channel() {
     for table in ["channels", "members", "tokens"] {
         assert_eq!(server.rows(table).await, 0, "{table}");
     }
+}
+
+/// What `phone` is shown as proof that it is out of channels: (channel, owner's key, proof).
+async fn removed(server: &Server, phone: &Phone) -> Vec<serde_json::Value> {
+    let (status, mine) = server.as_phone(phone, GET, "/v1/channels", None).await;
+    assert_eq!(status, StatusCode::OK);
+    mine["removed"].as_array().unwrap().clone()
+}
+
+#[tokio::test]
+async fn a_member_taken_out_is_kept_the_owners_roster_until_they_have_seen_it() {
+    let server = Server::new().await;
+    let (owner, member, leaver) = (server.phone().await, server.phone().await, server.phone().await);
+    let channel = server.channel_with(&owner, 3600, &[(&member, "Member"), (&leaver, "Leaver")]).await;
+
+    // Someone who leaves needs no proof: their own phone gave the channel up.
+    let path = format!("/v1/channels/{channel}/members/me");
+    let leave = json!({ "leave": leaver.device.seal(&leave_of(&leaver, &channel)) });
+    assert_eq!(server.as_phone(&leaver, DELETE, &path, Some(leave)).await.0, StatusCode::NO_CONTENT);
+    let without_leaver = roster(&channel, 3, &[(&owner, "Owner"), (&member, "Member")]);
+    assert_eq!(server.put_roster(&owner, &channel, &without_leaver).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("removals").await, 0);
+
+    // The owner takes the member out. The roster that did it is kept for the member,
+    // and only for the member.
+    let alone = roster(&channel, 4, &[(&owner, "Owner")]);
+    assert_eq!(server.put_roster(&owner, &channel, &alone).await.0, StatusCode::NO_CONTENT);
+    assert!(removed(&server, &owner).await.is_empty() && removed(&server, &leaver).await.is_empty());
+    let shown = removed(&server, &member).await;
+    assert_eq!((shown.len(), &shown[0]["id"]), (1, &json!(channel)));
+    let key = unb64(shown[0]["owner_key"].as_str().unwrap()).unwrap();
+    let signed: Signed = serde_json::from_value(shown[0]["roster"].clone()).unwrap();
+    assert_eq!(open_removal(&channel, &owner.id, &member.id, 3, &key, &signed), Ok(alone));
+    // A phone checks it, and would not take it from before it was let in or about anyone else.
+    assert!(open_removal(&channel, &owner.id, &member.id, 4, &key, &signed).is_err());
+    assert!(open_removal(&channel, &owner.id, &owner.id, 3, &key, &signed).is_err());
+    assert!(open_removal(&channel, &member.id, &member.id, 3, &key, &signed).is_err());
+
+    // It is there until the member's phone says it has seen it. Nobody else can say so.
+    let seen = format!("/v1/channels/{channel}/removal");
+    assert_eq!(server.as_phone(&leaver, DELETE, &seen, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("removals").await, 1);
+    assert_eq!(server.as_phone(&member, DELETE, &seen, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("removals").await, 0);
+}
+
+#[tokio::test]
+async fn proof_of_removal_goes_when_the_member_is_let_back_in_or_never_collects_it() {
+    let server = Server::new().await;
+    let (owner, member, other) = (server.phone().await, server.phone().await, server.phone().await);
+    let channel = server.channel_with(&owner, 3600, &[(&member, "Member"), (&other, "Other")]).await;
+    let (all, less) =
+        ([(&owner, "Owner"), (&member, "Member"), (&other, "Other")], [(&owner, "Owner"), (&other, "Other")]);
+
+    assert_eq!(server.put_roster(&owner, &channel, &roster(&channel, 3, &less)).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("removals").await, 1);
+    server.ask_to_join(&owner, &channel, &member, "Member").await;
+    assert_eq!(server.put_roster(&owner, &channel, &roster(&channel, 4, &all)).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("removals").await, 0, "back in, so there is nothing to prove");
+
+    assert_eq!(server.put_roster(&owner, &channel, &roster(&channel, 5, &less)).await.0, StatusCode::NO_CONTENT);
+    server.state.clock.advance(29 * 86_400);
+    deaddropd::sweep(&server.state).await.unwrap();
+    assert_eq!(server.rows("removals").await, 1);
+    server.state.clock.advance(2 * 86_400);
+    deaddropd::sweep(&server.state).await.unwrap();
+    assert_eq!(server.rows("removals").await, 0, "not kept for ever for a phone that never comes for it");
+}
+
+#[tokio::test]
+async fn deleting_a_channel_leaves_only_the_owners_signed_word_that_it_is_gone() {
+    let server = Server::new().await;
+    let (owner, member, out) = (server.phone().await, server.phone().await, server.phone().await);
+    let channel = server.channel_with(&owner, 3600, &[(&member, "Member"), (&out, "Out")]).await;
+    let elsewhere = server.channel(&owner, 3600).await;
+    let both = roster(&channel, 3, &[(&owner, "Owner"), (&member, "Member")]);
+    assert_eq!(server.put_roster(&owner, &channel, &both).await.0, StatusCode::NO_CONTENT);
+    assert!(removed(&server, &out).await[0]["roster"].is_object());
+
+    let path = format!("/v1/channels/{channel}");
+    let closed = |channel: &str| Closed { v: 1, channel: channel.to_owned(), issued: 1_800_000_000 };
+    // It has to be the owner's signed word about this channel.
+    for bad in [member.device.seal(&closed(&channel)), owner.device.seal(&closed(&elsewhere))] {
+        let body = json!({ "closed": bad });
+        assert_eq!(server.as_phone(&owner, DELETE, &path, Some(body)).await.0, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(server.rows("channels").await, 2);
+
+    let body = json!({ "closed": owner.device.seal(&closed(&channel)) });
+    assert_eq!(server.as_phone(&owner, DELETE, &path, Some(body)).await.0, StatusCode::NO_CONTENT);
+    assert_eq!((server.rows("channels").await, server.rows("members").await), (1, 1));
+
+    // Everyone who was in it, and the one taken out earlier, is shown the owner's word.
+    // The roster kept for that one has gone with the channel.
+    for phone in [&owner, &member, &out] {
+        let shown = removed(&server, phone).await;
+        assert_eq!((shown.len(), &shown[0]["id"], &shown[0]["roster"]), (1, &json!(channel), &json!(null)));
+        let key = unb64(shown[0]["owner_key"].as_str().unwrap()).unwrap();
+        let signed: Signed = serde_json::from_value(shown[0]["closed"].clone()).unwrap();
+        assert!(open_closed(&channel, &owner.id, &key, &signed).is_ok());
+        assert!(open_closed(&elsewhere, &owner.id, &key, &signed).is_err());
+        assert!(open_closed(&channel, &member.id, &key, &signed).is_err());
+    }
+}
+
+#[tokio::test]
+async fn an_owner_from_before_signed_deletions_can_still_delete_and_nothing_is_kept() {
+    let server = Server::new().await;
+    let (owner, member, out) = (server.phone().await, server.phone().await, server.phone().await);
+    let channel = server.channel_with(&owner, 3600, &[(&member, "Member"), (&out, "Out")]).await;
+    let both = roster(&channel, 3, &[(&owner, "Owner"), (&member, "Member")]);
+    assert_eq!(server.put_roster(&owner, &channel, &both).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("removals").await, 1);
+
+    // Versions up to 0.1.1 send nothing with the request.
+    let path = format!("/v1/channels/{channel}");
+    assert_eq!(server.as_phone(&owner, DELETE, &path, None).await.0, StatusCode::NO_CONTENT);
+    assert_eq!((server.rows("channels").await, server.rows("removals").await), (0, 0));
+}
+
+#[tokio::test]
+async fn an_owner_that_deletes_itself_leaves_its_signed_word_for_its_channels_members() {
+    let server = Server::new().await;
+    let (owner, member) = (server.phone().await, server.phone().await);
+    let signed_for = server.channel_with(&owner, 3600, &[(&member, "Member")]).await;
+    let unsigned = server.channel_with(&owner, 3600, &[(&member, "Member")]).await;
+    let theirs = server.channel(&member, 3600).await;
+
+    let closed = |signer: &Phone, channel: &str| {
+        signer.device.seal(&Closed { v: 1, channel: channel.to_owned(), issued: 1_800_000_000 })
+    };
+    // Not kept: one for a channel it does not own, and one somebody else signed.
+    let body = json!({ "closed": [closed(&owner, &signed_for), closed(&owner, &theirs), closed(&member, &unsigned)] });
+    assert_eq!(server.as_phone(&owner, DELETE, "/v1/devices/me", Some(body)).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(server.rows("channels").await, 1, "its channels went with it");
+
+    let shown = removed(&server, &member).await;
+    assert_eq!((shown.len(), &shown[0]["id"]), (1, &json!(signed_for)));
+    let key = unb64(shown[0]["owner_key"].as_str().unwrap()).unwrap();
+    let signed: Signed = serde_json::from_value(shown[0]["closed"].clone()).unwrap();
+    assert!(open_closed(&signed_for, &owner.id, &key, &signed).is_ok());
 }

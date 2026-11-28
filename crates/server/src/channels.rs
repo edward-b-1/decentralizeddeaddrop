@@ -6,6 +6,11 @@
 //! keep a removed one, or change a channel's settings. Nor can it get a member dropped:
 //! the owner's phone drops one unasked only on that member's own signed word
 //! (`records::Leave`), which the server keeps and hands on but cannot make.
+//!
+//! It works the other way round as well. A phone gives up a channel's keys only when
+//! shown the owner's signature for it: the roster that dropped it, or the owner's word
+//! that the channel is deleted (`records::Closed`). This server keeps those for the
+//! phones concerned (`removals`) and cannot make them either.
 
 use std::collections::HashSet;
 
@@ -144,9 +149,12 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(json!({ "id": id }))))
 }
 
-/// `GET /v1/channels`: the caller's channels and the join requests they have open.
+/// `GET /v1/channels`: the caller's channels, the join requests they have open, and
+/// the proof for each channel they have been taken out of (or that has been deleted)
+/// since they last said they had seen it: the owner's key with either the owner's
+/// `roster` that dropped them or the owner's signed `closed`.
 pub async fn mine(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
-    let (channels, requests) = state
+    let (channels, requests, removed) = state
         .store
         .run(move |db| {
             let mut query = db.prepare(
@@ -167,10 +175,41 @@ pub async fn mine(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<V
             let mut query = db.prepare("SELECT channel FROM join_requests WHERE device = ?1 ORDER BY channel")?;
             let requests =
                 query.query_map([&auth.device], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
-            Ok((channels, requests))
+            let mut query = db.prepare(
+                "SELECT channel, owner_key, closed, record, signature FROM removals WHERE device = ?1 ORDER BY channel",
+            )?;
+            let removed = query
+                .query_map([&auth.device], |row| {
+                    let kind = if row.get::<_, bool>(2)? { "closed" } else { "roster" };
+                    let mut proof = json!({
+                        "id": row.get::<_, String>(0)?,
+                        "owner_key": b64(&row.get::<_, Vec<u8>>(1)?),
+                    });
+                    proof[kind] = json!({ "record": row.get::<_, String>(3)?, "signature": row.get::<_, String>(4)? });
+                    Ok(proof)
+                })?
+                .collect::<rusqlite::Result<Vec<Value>>>()?;
+            Ok((channels, requests, removed))
         })
         .await?;
-    Ok(Json(json!({ "channels": channels, "requests": requests })))
+    Ok(Json(json!({ "channels": channels, "requests": requests, "removed": removed })))
+}
+
+/// `DELETE /v1/channels/{channel}/removal`: the caller has seen the proof that it is
+/// out of this channel, and the server need keep it no longer.
+pub async fn seen_removal(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(channel): Path<String>,
+) -> ApiResult<StatusCode> {
+    state
+        .store
+        .run(move |db| {
+            db.execute("DELETE FROM removals WHERE channel = ?1 AND device = ?2", [&channel, &auth.device])?;
+            store::checkpoint(db)?;
+            Ok(StatusCode::NO_CONTENT)
+        })
+        .await
 }
 
 /// `GET /v1/channels/{channel}`: the signed channel record and the owner's key, for
@@ -246,15 +285,43 @@ pub async fn update(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct Closing {
+    closed: Signed,
+}
+
 /// `DELETE /v1/channels/{channel}`: the owner deletes the channel and its queue.
-pub async fn destroy(State(state): State<AppState>, auth: Auth, Path(channel): Path<String>) -> ApiResult<StatusCode> {
+///
+/// The body is `{"closed": ...}`, the owner's signed [`deaddrop_core::records::Closed`].
+/// It is all that is kept of the channel, for each member's phone to check before it
+/// gives up the channel's keys. Versions up to 0.1.1 send no body: the members' phones
+/// then have only this server's word that the channel is gone, and keep it until the
+/// person holding the phone removes it.
+pub async fn destroy(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(channel): Path<String>,
+    body: Bytes,
+) -> ApiResult<StatusCode> {
+    const BAD_CLOSED: ApiError = ApiError::bad("closed is not valid or not signed by the channel owner");
+    let closing: Option<Closing> =
+        if body.is_empty() { None } else { Some(serde_json::from_slice(&body).map_err(|_| BAD_CLOSED)?) };
+    let now = state.clock.now();
     let members = state
         .store
         .run(move |db| {
             load_as_owner(db, &channel, &auth.device)?;
+            let key = owner_key(db, &auth.device)?;
+            let closed = closing.as_ref().map(|closing| &closing.closed);
+            if closed.is_some_and(|closed| !store::is_closure(&channel, &key, closed)) {
+                return Err(BAD_CLOSED);
+            }
             let members = store::member_devices(db, &channel)?;
-            db.execute("DELETE FROM channels WHERE id = ?1", [&channel])?;
-            db.execute("DELETE FROM tokens WHERE scope = ?1", [&channel])?;
+            let tx = db.transaction()?;
+            store::close_channel(&tx, &channel, &key, closed, now)?;
+            tx.execute("DELETE FROM channels WHERE id = ?1", [&channel])?;
+            tx.execute("DELETE FROM tokens WHERE scope = ?1", [&channel])?;
+            tx.commit()?;
             store::checkpoint(db)?;
             Ok(members)
         })
@@ -402,20 +469,22 @@ pub async fn put_roster(
     Path(channel): Path<String>,
     Json(body): Json<PutRoster>,
 ) -> ApiResult<StatusCode> {
+    let now = state.clock.now();
     let affected = state
         .store
         .run(move |db| {
             let current = load_as_owner(db, &channel, &auth.device)?;
-            let roster: Roster = body.roster.open(&owner_key(db, &auth.device)?).map_err(|_| BAD_ROSTER)?;
+            let key = owner_key(db, &auth.device)?;
+            let roster: Roster = body.roster.open(&key).map_err(|_| BAD_ROSTER)?;
             check_roster(&roster, &channel, &auth.device)?;
             if roster.version <= current.roster_version {
                 return Err(ApiError::conflict("roster version must go up"));
             }
 
             let tx = db.transaction()?;
-            let before: Vec<String> = {
-                let mut query = tx.prepare("SELECT device FROM members WHERE channel = ?1")?;
-                query.query_map([&channel], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?
+            let before: Vec<(String, bool)> = {
+                let mut query = tx.prepare("SELECT device, gone FROM members WHERE channel = ?1")?;
+                query.query_map([&channel], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<rusqlite::Result<_>>()?
             };
             // Who the roster being replaced lists.
             let last: String =
@@ -438,10 +507,15 @@ pub async fn put_roster(
                     return Err(ApiError::conflict("roster lists a device that has not asked to join"));
                 }
             }
-            for device in &before {
+            for (device, gone) in &before {
                 if !listed.contains(device.as_str()) {
                     store::drop_pending(&tx, &channel, device)?;
                     tx.execute("DELETE FROM members WHERE channel = ?1 AND device = ?2", [&channel, device])?;
+                    // This roster is their proof that the owner took them out. Someone
+                    // who left needs none: their phone gave the channel up when it did.
+                    if !gone {
+                        store::keep_removal(&tx, &channel, device, &key, &body.roster, now)?;
+                    }
                 }
             }
             // Delivery starts (or, for someone who left and has asked again, starts
@@ -454,6 +528,7 @@ pub async fn put_roster(
                 )?;
                 tx.execute("DELETE FROM join_requests WHERE channel = ?1 AND device = ?2", [channel.as_str(), device])?;
                 tx.execute("DELETE FROM leaves WHERE channel = ?1 AND device = ?2", [channel.as_str(), device])?;
+                tx.execute("DELETE FROM removals WHERE channel = ?1 AND device = ?2", [channel.as_str(), device])?;
             }
             // A leave has done its job once the owner's list no longer has the member.
             let kept: Vec<String> = {
@@ -471,7 +546,7 @@ pub async fn put_roster(
             tx.commit()?;
             store::checkpoint(db)?;
 
-            let mut affected = before;
+            let mut affected: Vec<String> = before.into_iter().map(|(device, _)| device).collect();
             affected.extend(roster.members.into_iter().map(|member| member.device));
             Ok(affected)
         })

@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use deaddrop_core::encoding::random_token;
-use deaddrop_core::records::{Leave, Signed};
+use deaddrop_core::records::{Closed, Leave, Signed};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -97,6 +97,25 @@ CREATE TABLE IF NOT EXISTS leaves (
     signature   TEXT NOT NULL,
     PRIMARY KEY (channel, device)
 ) WITHOUT ROWID;
+
+-- What a device is shown as proof that it is no longer in a channel: the owner's roster
+-- that dropped it (closed = 0), or the owner's word that the channel is deleted
+-- (records::Closed, closed = 1). Without one, a phone treats the channel's absence as
+-- this server's word and keeps its keys. A row goes when the device says it has seen
+-- it, when it expires, or with the device. It holds the owner's key and has no link to
+-- the channels table because it outlives the channel. Deleting a channel replaces the
+-- rosters kept here for it, so none outlives it.
+CREATE TABLE IF NOT EXISTS removals (
+    channel   TEXT NOT NULL,
+    device    TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    owner_key BLOB NOT NULL,
+    closed    INTEGER NOT NULL,
+    record    TEXT NOT NULL,
+    signature TEXT NOT NULL,
+    expires   INTEGER NOT NULL,
+    PRIMARY KEY (channel, device)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS removals_by_device ON removals(device);
 
 CREATE TABLE IF NOT EXISTS join_requests (
     channel TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
@@ -265,6 +284,63 @@ pub fn keep_leave(
         params![channel, device, signing_key, signed.record, signed.signature],
     )?;
     Ok(true)
+}
+
+/// How long a device is kept the proof that it is out of a channel, if it never
+/// collects it. A phone away for longer finds the channel missing with nothing to show
+/// why, keeps it, and leaves it to the person holding it to remove.
+pub const REMOVAL_SECONDS: i64 = 30 * 86_400;
+
+/// Keeps, for `device`, the owner's signed roster that dropped it from `channel`.
+pub fn keep_removal(
+    db: &Connection,
+    channel: &str,
+    device: &str,
+    owner_key: &[u8],
+    roster: &Signed,
+    now: i64,
+) -> rusqlite::Result<()> {
+    db.execute(
+        "INSERT INTO removals (channel, device, owner_key, closed, record, signature, expires)
+         VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)
+         ON CONFLICT (channel, device) DO UPDATE SET owner_key = ?3, closed = 0, record = ?4, signature = ?5, expires = ?6",
+        params![channel, device, owner_key, roster.record, roster.signature, now.saturating_add(REMOVAL_SECONDS)],
+    )?;
+    Ok(())
+}
+
+/// What goes before deleting `channel`: the rosters kept as proof for members it dropped
+/// are wiped, and if the owner signed that the channel is deleted (`closed`, already
+/// checked), that is kept instead, for them and for everyone still in the channel.
+pub fn close_channel(
+    db: &Connection,
+    channel: &str,
+    owner_key: &[u8],
+    closed: Option<&Signed>,
+    now: i64,
+) -> rusqlite::Result<()> {
+    let devices: Vec<String> = {
+        let mut query = db.prepare(
+            "SELECT device FROM members WHERE channel = ?1 AND gone = 0
+             UNION SELECT device FROM removals WHERE channel = ?1",
+        )?;
+        query.query_map([channel], |row| row.get(0))?.collect::<rusqlite::Result<_>>()?
+    };
+    db.execute("DELETE FROM removals WHERE channel = ?1", [channel])?;
+    let Some(closed) = closed else { return Ok(()) };
+    for device in devices {
+        db.execute(
+            "INSERT INTO removals (channel, device, owner_key, closed, record, signature, expires)
+             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)",
+            params![channel, device, owner_key, closed.record, closed.signature, now.saturating_add(REMOVAL_SECONDS)],
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether `signed` is the owner's word, under `owner_key`, that `channel` is deleted.
+pub fn is_closure(channel: &str, owner_key: &[u8], signed: &Signed) -> bool {
+    signed.open::<Closed>(owner_key).is_ok_and(|closed| closed.channel == channel)
 }
 
 /// Whether `device` currently receives `channel`'s messages.

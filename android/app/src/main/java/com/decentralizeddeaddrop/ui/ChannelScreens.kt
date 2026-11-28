@@ -87,7 +87,7 @@ fun ConversationScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, 
     val present = channel.members.count { !it.hasLeft }
     Page(
         title = channel.name,
-        subtitle = "${server?.label.orEmpty()} · $present ${if (present == 1) "member" else "members"}",
+        subtitle = "${server?.label.orEmpty()} · " + if (channel.unlisted) "no longer on the server" else "$present ${if (present == 1) "member" else "members"}",
         onBack = back,
         scrolls = false,
         action = {
@@ -96,7 +96,12 @@ fun ConversationScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit, 
         footer = {
             Column {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (channel.unlisted) {
+                    Note(
+                        "The server no longer shows this channel to this phone, so nothing can be sent or received here. What you already have is kept. Channel details says more.",
+                        Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                } else Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
@@ -217,7 +222,18 @@ fun ChannelDetailsScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit
         )
     }
     if (confirming) {
-        if (channel.ownedByMe) {
+        if (channel.unlisted) {
+            Confirm(
+                "Remove ${channel.name} from this phone?",
+                "Its history and its keys are removed from this phone. If the channel still exists, you would need a new invite to come back.",
+                "Remove",
+                onNo = { confirming = false },
+                onYes = {
+                    confirming = false
+                    runner.run(then = home) { Servers.leave(channel.slot, channel.id) }
+                },
+            )
+        } else if (channel.ownedByMe) {
             Confirm("Delete ${channel.name}?", "It is removed for everyone, with anything still waiting on the server. This cannot be undone.", "Delete", onNo = { confirming = false }, onYes = {
                 confirming = false
                 runner.run(then = home) { Servers.deleteChannel(channel.slot, channel.id) }
@@ -228,6 +244,26 @@ fun ChannelDetailsScreen(channel: ChannelUi, server: ServerUi?, back: () -> Unit
                 runner.run(then = home) { Servers.leave(channel.slot, channel.id) }
             })
         }
+    }
+
+    if (channel.unlisted) {
+        Page(title = channel.name, subtitle = server?.label, onBack = back) {
+            Note(
+                "The server no longer shows this channel to this phone, and has shown nothing signed by the channel's owner to say that you were removed or that the channel was deleted.",
+                Modifier.padding(top = 8.dp),
+            )
+            Note(
+                "That happens when the owner deleted the channel with an older version of the app, when the owner's phone was taken off the server, or when this phone was away for more than a month. It can also mean the server is at fault.",
+            )
+            Note("Nothing can be sent or received here. This phone keeps the channel and its history until you remove it. If the server shows the channel again, it carries on as before.")
+            Heading("This channel")
+            Item("Channel name", value = channel.name)
+            Item("Your name here", value = channel.myName)
+            Item("Members", value = channel.members.size.toString(), onClick = { go(Screen.Members(channel.key)) })
+            Heading(" ")
+            Item("Remove from this phone", danger = true, onClick = { confirming = true })
+        }
+        return
     }
 
     Page(title = channel.name, subtitle = server?.label, onBack = back) {
@@ -309,7 +345,7 @@ fun MembersScreen(channel: ChannelUi, back: () -> Unit, go: (Screen) -> Unit) {
                     // Someone who has left by their own signed word goes off the list by
                     // itself. Anyone else stays until the owner removes them: the server
                     // saying they have gone is not enough to sign them out.
-                    if (channel.ownedByMe && member.device != channel.owner && !member.leftConfirmed) {
+                    if (channel.ownedByMe && !channel.unlisted && member.device != channel.owner && !member.leftConfirmed) {
                         TextButton(onClick = { removing = member.device }, enabled = !runner.busy) {
                             Text("Remove", color = MaterialTheme.colorScheme.error)
                         }

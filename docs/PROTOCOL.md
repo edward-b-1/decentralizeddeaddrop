@@ -180,6 +180,23 @@ up). Every change of membership is a new roster. Phones never accept an older on
   member.
 - A device the operator removes signs nothing, so to a channel's owner it is "no longer
   on this server": theirs to remove from the roster, or not.
+- **The server cannot make a phone give up a channel.** A phone forgets a channel, and
+  destroys its keys for it, only on the owner's signature: a roster newer than the one
+  it holds that does not list it (the owner removed it), or a short record the owner
+  signs when deleting the channel (a *closed*: the channel's ID). The server keeps the
+  one or the other for each phone concerned and shows it with that phone's list of
+  channels. The phone checks it against the owner it already knows, then tells the
+  server it has seen it, and the server deletes its copy. Uncollected, a copy is
+  deleted after 30 days. When a channel is deleted, any roster kept this way for it is
+  replaced by the closed record, so no member list outlives its channel.
+- A channel the server simply stops showing a phone, with no such proof, is kept on that
+  phone, keys and history, marked as no longer on the server. Nothing can be sent or
+  received there. It carries on if the server shows it again, and it is for the person
+  holding the phone to remove it. This is what a phone sees when the owner deleted the
+  channel with version 0.1.1 or earlier, when the operator removed the owner's device,
+  or when the phone was away for longer than the proof was kept.
+- An owner taking a server off their phone signs a closed record for each channel they
+  own, for the same reason a member signs leaves.
 
 ## 6. Message encryption
 
@@ -322,6 +339,7 @@ same rules.
 | Refuse service; drop or delay messages | Read any message (never holds a key) |
 | See which device IDs are in which channel, and when they send | Forge a message from a member (signatures) |
 | See message sizes (padded) and connection addresses | Add a member other phones accept, or keep a removed one (owner-signed roster) |
+| Say that a member has left, or that a phone is no longer in a channel | Get the owner's phone to drop that member, or that phone to destroy its keys (both need a signature the server cannot make) |
 | Keep sealed copies it claims to have wiped | Open them later, even with a seized phone (forward secrecy) |
 
 Logging follows Pocket Radio's rule: nothing that identifies a user or device is logged

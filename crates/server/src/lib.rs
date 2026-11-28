@@ -46,6 +46,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/channels/{channel}/roster", put(channels::put_roster))
         .route("/v1/channels/{channel}/members", get(channels::members))
         .route("/v1/channels/{channel}/members/me", delete(channels::leave))
+        .route("/v1/channels/{channel}/removal", delete(channels::seen_removal))
         .route("/v1/channels/{channel}/messages", post(queue::send))
         .route("/v1/keys", get(prekeys::status).put(prekeys::publish))
         .route("/v1/channels/{channel}/keys/claim", post(prekeys::claim))

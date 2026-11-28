@@ -1,5 +1,6 @@
-//! Signed records: a channel's settings and member list, signed by its owner, and what
-//! a device signs for itself (its messaging keys, and its word that it is leaving).
+//! Signed records: a channel's settings and member list and its deletion, signed by its
+//! owner, and what a device signs for itself (its messaging keys, and its word that it
+//! is leaving).
 //!
 //! A record travels as the exact JSON text that was signed, plus the signature
 //! ([`Signed`]). Readers verify the signature over that text and only then parse it, so
@@ -158,6 +159,62 @@ pub fn open_leave(
         return Err(RecordError::BadSignature);
     }
     Ok(leave)
+}
+
+/// The owner's word that a channel is deleted, signed with the owner's signing key.
+///
+/// A channel's ID is random and never used again, so there is nothing here to replay:
+/// once the owner has signed this, the channel is gone for good.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Closed {
+    pub v: u32,
+    pub channel: String,
+    pub issued: i64,
+}
+
+impl Record for Closed {
+    const CONTEXT: &'static str = "deaddrop/closed/v1";
+    fn format_version(&self) -> u32 {
+        self.v
+    }
+}
+
+/// Checks a signed [`Closed`] the way a phone must before forgetting a channel on the
+/// strength of it: the key is the one the channel's owner is named after, the record is
+/// signed by it, and it is about this channel.
+pub fn open_closed(channel: &str, owner: &str, owner_key_der: &[u8], signed: &Signed) -> Result<Closed, RecordError> {
+    if keys::device_id(owner_key_der) != owner {
+        return Err(RecordError::BadSignature);
+    }
+    let closed: Closed = signed.open(owner_key_der)?;
+    if closed.channel != channel {
+        return Err(RecordError::BadSignature);
+    }
+    Ok(closed)
+}
+
+/// Checks a roster offered as proof that the owner has taken `device` out of a channel:
+/// the key is the one the channel's owner is named after, the roster is signed by it and
+/// is this channel's, it is newer than the roster `device` last saw itself in
+/// (`held_version`), and it does not list `device`.
+///
+/// "Newer" is what stops a server offering a roster from before the device was let in.
+pub fn open_removal(
+    channel: &str,
+    owner: &str,
+    device: &str,
+    held_version: u64,
+    owner_key_der: &[u8],
+    signed: &Signed,
+) -> Result<Roster, RecordError> {
+    if keys::device_id(owner_key_der) != owner {
+        return Err(RecordError::BadSignature);
+    }
+    let roster: Roster = signed.open(owner_key_der)?;
+    let removed = roster.channel == channel
+        && roster.version > held_version
+        && !roster.members.iter().any(|member| member.device == device);
+    if removed { Ok(roster) } else { Err(RecordError::BadSignature) }
 }
 
 /// A device's messaging keys, signed by its signing key (the one its device ID is the

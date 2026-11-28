@@ -155,6 +155,10 @@ fn status(account: &Account) {
     for channel in account.channels() {
         let role = if channel.owner == account.device() { ", owned by this device" } else { "" };
         println!("\n{} ({}{role})", channel.name, channel.id);
+        if channel.unlisted {
+            println!("  The server no longer shows this device the channel, with nothing from its owner to say why.");
+            println!("  Its keys are kept. `leave` takes it off this device.");
+        }
         println!("  maximum message age: {} seconds", channel.max_age);
         for member in &channel.members {
             let gone = if channel.confirmed.contains(&member.device) {

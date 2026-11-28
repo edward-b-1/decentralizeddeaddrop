@@ -43,7 +43,12 @@ design it receives as little as possible:
   that gets the server's password wrong.
 
 Taking a server off your phone (Servers → the server → Remove from this phone) deletes
-your device, your place in its channels and the channels you own from that server.
+your device, your place in its channels and the channels you own from that server. One
+thing stays for a while: a short signed note that you have left each channel, or that
+each channel you owned is deleted, so that the other members' phones can check it came
+from you. It holds your device ID and your public key and nothing else. The server
+deletes it once those phones have seen it; a note that a channel is deleted is deleted
+after 30 days at the latest.
 
 ## The camera and notifications
 
